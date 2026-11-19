@@ -14,9 +14,11 @@ import { installChiefNativeDelivery } from './runtime/chief_delivery.mjs';
 import { bindChiefTaskActions } from './runtime/chief_actions.mjs';
 import { installChiefContext } from './runtime/chief_context.mjs';
 import { installChiefReaders } from './runtime/chief_readers.mjs';
-import { installManagedProductHost } from './runtime/managed_product_host.mjs';
+import { installManagedProductHost, privateBotActor } from './runtime/managed_product_host.mjs';
 import { createGitHubGateway } from './runtime/github_setup.mjs';
 import { preparePython } from './runtime/python_setup.mjs';
+import { emergencyRoute } from './runtime/emergency.mjs';
+import { createEmergencyHost } from './runtime/emergency_host.mjs';
 
 export const name = 'dsbot-autoloop-plugin';
 export const inject = [
@@ -30,6 +32,7 @@ const ACCEPTANCE_TIMEOUT_MS = 120_000;
 const MODEL_SLOTS = 3;
 const HTTP_TIMEOUT_MS = 10_000;
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const VERSION = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
 const BASE = '/api/autoloop/';
 const TOOL = 'autoloop_prepare_project';
 const FEEDBACK = 'autoloop_send_feedback';
@@ -414,9 +417,29 @@ export async function apply(ctx, input = {}) {
   const bindingOf = id => id ? botBinding(readBotState(), id) : undefined;
   const roleOf = id => bindingOf(id)?.role;
   mkdirSync(join(dataDir, 'managed-products'), { recursive: true, mode: 0o700 });
+  let emergencyFault;
+  const unregisterEmergency = ctx.connection.fetch.register(emergencyRoute({
+    dataDir, mountedVersion: VERSION, createHost: createEmergencyHost, diagnose: () => emergencyFault,
+    chiefFor(sessionId) {
+      const actor = privateBotActor(readBotState(), sessionId, botConversation);
+      return actor?.chief ? actor.id : undefined;
+    },
+  }));
+  function emergencyOnly(error) {
+    if (existsSync(join(dataDir, 'emergency-config.json'))) {
+      emergencyFault = error.message;
+      ctx.logger.error('Autoloop started with only the emergency control: %s', error.message);
+      return unregisterEmergency;
+    }
+    unregisterEmergency();
+    throw error;
+  }
   const github = createGitHubGateway(dataDir);
-  const python = await preparePython({ python: config.python, dataDir, requirementsPath: join(ROOT, 'requirements.txt') });
-  const runtime = startRuntime(ctx, { ...config, python }, dataDir, readBotState, github);
+  let runtime;
+  try {
+    const python = await preparePython({ python: config.python, dataDir, requirementsPath: join(ROOT, 'requirements.txt') });
+    runtime = startRuntime(ctx, { ...config, python }, dataDir, readBotState, github);
+  } catch (error) { return emergencyOnly(error); }
   const disposers = [];
   disposers.push(github.close);
   const taskActions = bindChiefTaskActions(ctx, roleOf);
@@ -689,7 +712,10 @@ export async function apply(ctx, input = {}) {
     }), { when: chief }));
   } catch (error) {
     await dispose();
-    throw error;
+    return emergencyOnly(error);
   }
-  return dispose;
+  return async () => {
+    try { await dispose(); }
+    finally { unregisterEmergency(); }
+  };
 }

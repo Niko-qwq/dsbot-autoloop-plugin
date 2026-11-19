@@ -6,7 +6,9 @@ import { previewHref, registerNotices } from './notices';
 import { syncProjectPMs } from './project_pm';
 import type { ProjectPM } from './project_pm';
 import { createManagedProductPanel } from './managed_product';
+import { createEmergencyControl } from './emergency';
 import styles from './panel.css';
+import emergencyStyles from './emergency.css';
 
 const ID = 'dsbot-autoloop-plugin';
 const KIND = 'autoloop';
@@ -473,13 +475,17 @@ window.__ModuleLoader__.load({ id: ID, factory(require) {
     ctx.effect(() => ctx.locale.register(KIND, dictionaries), 'Autoloop copy');
     ctx.effect(() => {
       const style = document.createElement('style');
-      style.textContent = styles;
+      style.textContent = styles + emergencyStyles;
       document.head.append(style);
       return () => style.remove();
     }, 'Autoloop styles');
     const notices = registerNotices(ctx.slots, React, KIND);
     ctx.effect(notices.connect, 'Autoloop notice feed');
     registerPanel(React, ctx, notices);
+    const EmergencyControl = createEmergencyControl(React);
+    const emergencySlot = 'conversation.session.header.utilities';
+    ctx.slots.inject(emergencySlot, () => ctx.slots.register({ name: emergencySlot, id: 'autoloop-emergency', order: 100, locale: KIND },
+      ({ t, sessionId }: { t: Translate; sessionId: string }) => <EmergencyControl key={sessionId} sessionId={sessionId} chinese={t('managed') === '产品'} />));
     registerChatCards(ctx.slots, React, KIND, open);
     ctx.effect(() => {
       const { mounted } = ctx.sidebarRight;
