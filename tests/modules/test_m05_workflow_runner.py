@@ -7,7 +7,7 @@ import pytest
 
 from runtime.workflow_native import NATIVE_ARCHIVE, NATIVE_FILES, NATIVE_ROUTE, validate_native_archive
 from runtime.workflow_package import WorkflowPackageError, deterministic_zip, freeze_workflow, json_bytes, load_workflow, sha256_hex
-from runtime.workflow_runner import WorkflowRunError, run_workflow, verify_run_artifacts
+from runtime.workflow_runner import REVIEW, WorkflowRunError, run_workflow, verify_run_artifacts
 
 
 def freeze(tmp_path, name, kind, labels, **tool_options):
@@ -191,6 +191,14 @@ def test_verifies_native_archive_and_preserves_readback_of_earlier_browser_runs(
 
     manifest_path = output / "manifest.json"
     manifest = json.loads(manifest_path.read_bytes())
+    native.write_bytes(deterministic_zip(files))
+    manifest["artifacts"] = [item for item in manifest["artifacts"] if item["path"] != REVIEW]
+    legacy_native_manifest = json_bytes(manifest)
+    manifest_path.write_bytes(legacy_native_manifest)
+    (output / REVIEW).unlink()
+    prior_native = verify_run_artifacts(output, expected_manifest_digest=sha256_hex(legacy_native_manifest),
+                                        expected_workflow_digest=workflow.digest)
+    assert len(prior_native.artifacts) == 7
     manifest["artifacts"] = [item for item in manifest["artifacts"] if item["path"] != NATIVE_ARCHIVE]
     legacy_manifest = json_bytes(manifest)
     manifest_path.write_bytes(legacy_manifest)
@@ -198,3 +206,28 @@ def test_verifies_native_archive_and_preserves_readback_of_earlier_browser_runs(
     legacy = verify_run_artifacts(output, expected_manifest_digest=sha256_hex(legacy_manifest),
                                   expected_workflow_digest=workflow.digest)
     assert len(legacy.artifacts) == 6
+
+
+@pytest.mark.parametrize("kind,options,expected", [
+    ("checklist", {}, "已完成 1 / 2"),
+    ("calculator", {"operation": "product"}, "实时连乘"),
+    ("template", {"template": "标题 {1} / 来源 {2}"}, "标题 样例1 / 来源 样例2"),
+])
+def test_review_material_uses_actual_source_and_runner_behavior(tmp_path, kind, options, expected):
+    workflow = freeze(tmp_path, "生产工具", kind, ["标题来源", "查看证据"], **options)
+    output = tmp_path / "run"
+    result = run_workflow(workflow, idea={"kind": kind, "title": "核对卡片", "description": "逐项核对公开来源。",
+                                         "labels": ["标题来源", "查看证据"], **options}, output_dir=output,
+                          workflow_version="v0.1.0")
+    review = output / REVIEW
+    content = review.read_text(encoding="utf-8")
+    assert all(phrase in content for phrase in ("核对卡片", "逐项核对公开来源", "标题来源", "查看证据", "v0.1.0",
+               NATIVE_ARCHIVE, NATIVE_ROUTE, workflow.digest, workflow.commit, workflow.dag_digest, expected,
+               sha256_hex((output / NATIVE_ARCHIVE).read_bytes()), "【填写后台真实项目信息", "无需用户登录"))
+    record = next(item for item in result.artifacts if item.path == REVIEW)
+    assert record.sha256 == sha256_hex(review.read_bytes())
+    assert verify_run_artifacts(output, expected_manifest_digest=result.manifest_digest,
+                                expected_workflow_digest=workflow.digest) == result
+    review.write_bytes(b"x" * record.bytes)
+    with pytest.raises(WorkflowRunError, match="review-materials.md"):
+        verify_run_artifacts(output, expected_manifest_digest=result.manifest_digest, expected_workflow_digest=workflow.digest)

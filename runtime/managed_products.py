@@ -387,7 +387,7 @@ class ManagedProducts:
         directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         attempt = directory / str(run["attempt"])
         try:
-            result = run_workflow(workflow, idea=idea, output_dir=attempt)
+            result = run_workflow(workflow, idea=idea, output_dir=attempt, workflow_version=build["version"])
             result = verify_run_artifacts(attempt, expected_manifest_digest=result.manifest_digest,
                                           expected_workflow_digest=build["artifact_sha256"])
             run.update(status="completed", entry=result.entry,
@@ -502,7 +502,7 @@ class DefaultWorkflowEntry:
         directory = self.service.product_dir(self.repository_id) / "probes"
         directory.mkdir(mode=0o700, exist_ok=True)
         output = directory / uuid4().hex
-        result = run_workflow(workflow, idea="离线工作流健康核验", output_dir=output)
+        result = run_workflow(workflow, idea="离线工作流健康核验", output_dir=output, workflow_version=actual["version"])
         verify_run_artifacts(output, expected_manifest_digest=result.manifest_digest,
                              expected_workflow_digest=actual["artifact_sha256"])
         return f"probe:{result.manifest_digest}"

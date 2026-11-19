@@ -48,7 +48,7 @@ async function fixture(t, answer = () => ({ status: 200, data: { products: [] } 
 
 test('private assigned usage starts one run per direct user turn and cannot use human-only actions', async t => {
   const f = await fixture(t, () => ({ status: 200, data: { status: 'completed', id: RUN,
-    artifacts: [{ path: 'xiaohongshu-miniapp.zip' }] } }));
+    artifacts: [{ path: 'xiaohongshu-miniapp.zip' }, { path: 'review-materials.md' }] } }));
   const usage = f.agent('usage-session');
   assert.equal(f.when({ agent: usage }), true);
   assert.equal(f.when({ agent: f.agent('shared-session') }), false);
@@ -64,6 +64,7 @@ test('private assigned usage starts one run per direct user turn and cannot use 
   const result = JSON.parse(await run());
   assert.match(result.open_url, /artifact=index.html/u);
   assert.match(result.miniapp_url, /artifact=xiaohongshu-miniapp.zip/u);
+  assert.match(result.review_materials_url, /artifact=review-materials.md/u);
   await run();
   assert.equal(f.calls[0].source_id, f.calls[1].source_id);
   assert.equal(f.calls[0].actor_id, 'usage');
@@ -104,6 +105,7 @@ test('artifact route binds the actor and receipt, and refuses changed bytes', as
   const files = {
     'index.html': '<link rel="stylesheet" href="tool.css"><script defer src="tool.js"></script><main>试用</main>',
     'tool.css': 'main { color: black; }', 'tool.js': 'void 0;', 'xiaohongshu-miniapp.zip': 'native archive fixture',
+    'review-materials.md': '# 提审材料草稿',
   };
   const f = await fixture(t, entry => {
     if (entry.actor_id !== 'usage') return { status: 403, data: { error: 'wrong product actor' } };
@@ -127,6 +129,9 @@ test('artifact route binds the actor and receipt, and refuses changed bytes', as
   const download = await open('usage-session', 'xiaohongshu-miniapp.zip');
   assert.equal(download.headers.get('content-disposition'), 'attachment; filename="xiaohongshu-miniapp.zip"');
   assert.equal(await download.text(), files['xiaohongshu-miniapp.zip']);
+  const review = await open('usage-session', 'review-materials.md');
+  assert.equal(review.headers.get('content-disposition'), 'attachment; filename="review-materials.md"');
+  assert.equal(await review.text(), files['review-materials.md']);
   await writeFile(join(directory, 'tool.js'), 'void 1;');
   assert.equal((await open('usage-session', 'index.html')).status, 409);
 });

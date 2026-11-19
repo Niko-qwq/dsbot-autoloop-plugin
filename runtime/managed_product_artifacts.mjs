@@ -9,7 +9,8 @@ const RUN = /^[a-f0-9]{32}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const TYPES = { 'index.html': 'text/html; charset=utf-8', 'tool.css': 'text/css; charset=utf-8',
   'tool.js': 'text/javascript; charset=utf-8', 'README.md': 'text/markdown; charset=utf-8',
-  'materials.json': 'application/json', 'tool.zip': 'application/zip', 'xiaohongshu-miniapp.zip': 'application/zip' };
+  'materials.json': 'application/json', 'tool.zip': 'application/zip', 'xiaohongshu-miniapp.zip': 'application/zip',
+  'review-materials.md': 'text/markdown; charset=utf-8' };
 export const productViewHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' };
 export const productResponse = (value, status = 200) => Response.json(value, { status, headers: productViewHeaders });
 const sha256 = (bytes, encoding = 'hex') => createHash('sha256').update(bytes).digest(encoding);
@@ -55,7 +56,9 @@ export function managedRunLinks(run, actor, repositoryId) {
   return { ...run, open_url: artifactUrl(actor.sessionId, repositoryId, run.id, 'index.html'),
     download_url: artifactUrl(actor.sessionId, repositoryId, run.id, 'tool.zip'),
     ...(run.artifacts?.some(item => item.path === 'xiaohongshu-miniapp.zip')
-      ? { miniapp_url: artifactUrl(actor.sessionId, repositoryId, run.id, 'xiaohongshu-miniapp.zip') } : {}) };
+      ? { miniapp_url: artifactUrl(actor.sessionId, repositoryId, run.id, 'xiaohongshu-miniapp.zip') } : {}),
+    ...(run.artifacts?.some(item => item.path === 'review-materials.md')
+      ? { review_materials_url: artifactUrl(actor.sessionId, repositoryId, run.id, 'review-materials.md') } : {}) };
 }
 
 async function verifiedFile(dataDir, receipt) {

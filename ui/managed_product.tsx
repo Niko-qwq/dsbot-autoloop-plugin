@@ -2,7 +2,7 @@ import { request, usePoll } from './chat_cards';
 
 type Bot = { id: string; name: string };
 type Build = { id: string; version: string; artifact_sha256: string; issue_numbers: number[] };
-type Run = { id: string; status: string; build: Build; open_url?: string; download_url?: string; miniapp_url?: string; error?: string };
+type Run = { id: string; status: string; build: Build; open_url?: string; download_url?: string; miniapp_url?: string; review_materials_url?: string; error?: string };
 type Trial = { build: Build; status: string; verified_count: number; required_count: number;
   runs: { id: string; verification: { verdict: string } | null; open_url?: string }[] };
 type Version = { version: string; released?: boolean; issue_numbers: number[]; pull_request?: { number: number } };
@@ -149,7 +149,8 @@ export function createManagedProductPanel(React: typeof import('react')) {
           <p>{run.build.version} · {run.id.slice(0, 8)} · {run.status}</p>
           {run.open_url && <p className="autoloop-project-actions"><a href={run.open_url} target="_blank" rel="noreferrer">{label('打开小工具', 'Open tool')}</a>
             <a href={run.download_url}>{label('网页 ZIP', 'Web ZIP')}</a>
-            {run.miniapp_url && <a href={run.miniapp_url}>{label('小红书小程序 ZIP', 'Xiaohongshu Mini App ZIP')}</a>}</p>}
+            {run.miniapp_url && <a href={run.miniapp_url}>{label('小红书小程序 ZIP', 'Xiaohongshu Mini App ZIP')}</a>}
+            {run.review_materials_url && <a href={run.review_materials_url}>{label('下载提审材料', 'Download review materials')}</a>}</p>}
           {run.error && <p className="autoloop-error">{run.error}</p>}
         </div>)}
       </details>}
