@@ -664,6 +664,126 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
     return locks ? locks.request("autoloop-native-pm-roster", { signal }, sync) : sync();
   }
 
+  // ui/managed_product.tsx
+  function githubLink(value) {
+    if (!value) return void 0;
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:" && url.hostname === "github.com" && !url.username && !url.password) return url.href;
+    } catch {
+    }
+  }
+  function productPath(session, product, version) {
+    const query = new URLSearchParams({ session_id: session });
+    if (product) query.set("repository_id", String(product.repository_id));
+    if (version) query.set("version", version);
+    return `product?${query}`;
+  }
+  function createManagedProductPanel(React) {
+    function ChiefSetup({ session, bots, label, submit, busy }) {
+      const setupPath = `github-setup?${new URLSearchParams({ session_id: session })}`;
+      const { value: github, error: loadError } = usePoll(React, setupPath);
+      const [registration, setRegistration] = React.useState();
+      const [error, setError] = React.useState();
+      const install = githubLink(github?.installUrl);
+      const register = githubLink(registration?.registrationUrl);
+      async function connect(event) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        setError(void 0);
+        try {
+          setRegistration(await request(setupPath, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ organization: String(data.get("organization") ?? "").trim(), allowRepositoryCreation: data.has("allow_create") })
+          }));
+        } catch (problem) {
+          setError(problem instanceof Error ? problem.message : String(problem));
+        }
+      }
+      function attach(event) {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const read = (name) => String(data.get(name) ?? "").trim();
+        void submit({
+          operation: "attach",
+          owner: read("owner"),
+          name: read("name"),
+          title: read("title"),
+          pm: read("pm"),
+          usage: read("usage"),
+          budget: Number(data.get("budget")),
+          rollback: data.has("rollback"),
+          confirmed: data.has("confirmed"),
+          create: data.has("create"),
+          account_type: data.has("organization_account") ? "organization" : "personal"
+        });
+      }
+      return /* @__PURE__ */ React.createElement("details", { className: "autoloop-project autoloop-managed-setup" }, /* @__PURE__ */ React.createElement("summary", null, label("GitHub \u4E0E\u4EA7\u54C1\u63A5\u5165", "GitHub and product setup")), github?.connected ? /* @__PURE__ */ React.createElement("p", null, label("GitHub App \u5DF2\u6CE8\u518C", "GitHub App registered"), github.slug ? ` \xB7 ${github.slug}` : "", install && /* @__PURE__ */ React.createElement(React.Fragment, null, " \xB7 ", /* @__PURE__ */ React.createElement("a", { href: install, target: "_blank", rel: "noreferrer" }, label("\u5B89\u88C5\u5230\u4EA7\u54C1\u4ED3\u5E93", "Install on product repositories")))) : register ? /* @__PURE__ */ React.createElement("form", { action: register, method: "post", target: "_blank", rel: "noreferrer" }, /* @__PURE__ */ React.createElement("input", { type: "hidden", name: "manifest", value: JSON.stringify(registration?.manifest) }), /* @__PURE__ */ React.createElement("button", { type: "submit" }, label("\u5728 GitHub \u521B\u5EFA App", "Create the GitHub App"))) : /* @__PURE__ */ React.createElement("form", { onSubmit: connect }, /* @__PURE__ */ React.createElement("label", null, label("GitHub \u7EC4\u7EC7\uFF08\u53EF\u7559\u7A7A\uFF09", "GitHub organization (optional)"), /* @__PURE__ */ React.createElement("input", { name: "organization" })), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", name: "allow_create" }), " ", label("\u6253\u5F00\u5EFA\u5E93\u6743\u9650", "Enable repository provisioning")), /* @__PURE__ */ React.createElement("button", { type: "submit" }, label("\u51C6\u5907 GitHub App", "Prepare GitHub App"))), (error || loadError) && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, error ?? loadError), /* @__PURE__ */ React.createElement("form", { onSubmit: attach }, /* @__PURE__ */ React.createElement("label", null, label("\u4EA7\u54C1\u540D\u79F0", "Product name"), /* @__PURE__ */ React.createElement("input", { name: "title", required: true, maxLength: 160 })), /* @__PURE__ */ React.createElement("label", null, label("\u4ED3\u5E93\u6240\u6709\u8005", "Repository owner"), /* @__PURE__ */ React.createElement("input", { name: "owner", required: true })), /* @__PURE__ */ React.createElement("label", null, label("\u4ED3\u5E93\u540D\u79F0", "Repository name"), /* @__PURE__ */ React.createElement("input", { name: "name", required: true })), ["pm", "usage"].map((role) => /* @__PURE__ */ React.createElement("label", { key: role }, role === "pm" ? "PM Bot" : label("\u4F7F\u7528 Bot", "Usage Bot"), /* @__PURE__ */ React.createElement("select", { name: role, required: true, defaultValue: "" }, /* @__PURE__ */ React.createElement("option", { value: "", disabled: true }, label("\u9009\u62E9 Bot", "Choose a Bot")), bots.map((bot) => /* @__PURE__ */ React.createElement("option", { key: bot.id, value: bot.id }, bot.name))))), /* @__PURE__ */ React.createElement("label", null, label("\u7248\u672C\u9884\u7B97\uFF08\u7F8E\u5143\uFF09", "Version budget (USD)"), /* @__PURE__ */ React.createElement("input", { name: "budget", type: "number", min: "0.01", max: "10000", step: "0.01", defaultValue: "10", required: true })), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { name: "create", type: "checkbox" }), " ", label("\u521B\u5EFA\u65B0\u79C1\u6709\u4ED3\u5E93", "Create a private repository")), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { name: "organization_account", type: "checkbox" }), " ", label("\u4F7F\u7528\u7EC4\u7EC7\u8D26\u53F7\u5EFA\u5E93", "Create under an organization")), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { name: "rollback", type: "checkbox" }), " ", label("\u6388\u6743\u56DE\u9000\u5DF2\u9A8C\u8BC1\u7684\u5DE5\u4F5C\u6D41", "Authorize rollback to a verified workflow")), /* @__PURE__ */ React.createElement("label", null, /* @__PURE__ */ React.createElement("input", { name: "confirmed", type: "checkbox", required: true }), " ", label("\u786E\u8BA4\u89D2\u8272\u3001\u9884\u7B97\u548C\u672C\u673A\u53D1\u5E03\u8303\u56F4", "Confirm roles, budget and local deployment")), /* @__PURE__ */ React.createElement("button", { type: "submit", disabled: busy || bots.length < 2 }, label("\u7ED1\u5B9A\u4EA7\u54C1", "Bind product"))));
+    }
+    function WorkflowPlan({ product, version, session, label, submit, busy }) {
+      const { value, error } = usePoll(React, productPath(session, product, version.version));
+      const plan = value?.plan;
+      return /* @__PURE__ */ React.createElement("details", { className: "autoloop-project", open: true }, /* @__PURE__ */ React.createElement("summary", null, label("\u7248\u672C\u8BA1\u5212", "Version plan"), " \xB7 ", version.version, " ", plan?.status && `\xB7 ${plan.status}`), (error || plan?.error) && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, error ?? plan?.error), !plan?.tasks?.length && /* @__PURE__ */ React.createElement("p", { className: "autoloop-meta" }, plan?.draft_status ?? label("\u7B49\u5F85 PM \u62DF\u5B9A\u8BA1\u5212", "Waiting for the PM plan")), !!plan?.tasks?.length && /* @__PURE__ */ React.createElement("ul", null, plan.tasks.map((task) => /* @__PURE__ */ React.createElement("li", { key: task.task_id }, task.title, " \xB7 ", task.status))), plan?.status === "IDLE" && !!plan.tasks?.length && /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          type: "button",
+          disabled: busy,
+          onClick: () => void submit({ operation: "start", repository_id: product.repository_id, version: version.version })
+        },
+        label("\u786E\u8BA4\u542F\u52A8\u7248\u672C", "Confirm and start version")
+      ));
+    }
+    function ProductHistory({ product, canReview, label, submit, busy }) {
+      const trials = product.trial_history ?? (product.trials ? [product.trials] : []);
+      const operations = Object.values(product.delivery.completed);
+      const repository = repositoryLink(product);
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, !!trials.length && /* @__PURE__ */ React.createElement("details", { className: "autoloop-project", open: true }, /* @__PURE__ */ React.createElement("summary", null, label("\u5019\u9009\u8BD5\u7528", "Candidate trials")), trials.map((trial) => /* @__PURE__ */ React.createElement("div", { key: trial.build.id }, /* @__PURE__ */ React.createElement("p", null, trial.build.version, " \xB7 ", trial.verified_count, "/", trial.required_count, " \xB7 ", trial.status, /* @__PURE__ */ React.createElement("code", { title: trial.build.artifact_sha256 }, " \xB7 ", trial.build.artifact_sha256.slice(0, 12))), trial.runs.map((run) => /* @__PURE__ */ React.createElement("div", { className: "autoloop-project-actions", key: run.id }, /* @__PURE__ */ React.createElement("span", null, run.id.slice(0, 8), " \xB7 ", run.verification?.verdict ?? label("\u5F85\u6838\u9A8C", "Pending review")), run.open_url && /* @__PURE__ */ React.createElement("a", { href: run.open_url, target: "_blank", rel: "noreferrer" }, label("\u6838\u5BF9\u4EA7\u7269", "Review tool")), canReview && trial.status === "active" && !run.verification && ["pass", "fail"].map((verdict) => /* @__PURE__ */ React.createElement("button", { key: verdict, type: "button", disabled: busy, onClick: () => void submit({
+        operation: "accept_trial",
+        repository_id: product.repository_id,
+        build_id: trial.build.id,
+        run_id: run.id,
+        verdict
+      }) }, verdict === "pass" ? label("\u786E\u8BA4\u91C7\u7EB3", "Accept") : label("\u9000\u56DE", "Reject")))))))), /* @__PURE__ */ React.createElement("details", { className: "autoloop-project", open: true }, /* @__PURE__ */ React.createElement("summary", null, label("GitHub Issue \u6536\u4EF6\u7BB1", "GitHub issue inbox")), !product.issues.length && /* @__PURE__ */ React.createElement("p", { className: "autoloop-muted" }, label("\u6682\u65E0 Issue", "No issues")), product.issues.map((issue) => /* @__PURE__ */ React.createElement("details", { className: "autoloop-managed-issue", key: issue.number }, /* @__PURE__ */ React.createElement("summary", null, "#", issue.number, " \xB7 ", issue.title, " ", /* @__PURE__ */ React.createElement("small", null, issue.triage, " \xB7 ", issue.state)), /* @__PURE__ */ React.createElement("a", { href: `${repository}/issues/${issue.number}`, target: "_blank", rel: "noreferrer" }, label("\u5728 GitHub \u67E5\u770B", "Open in GitHub")), product.versions.filter((version) => version.issue_numbers.includes(issue.number)).map((version) => /* @__PURE__ */ React.createElement("p", { key: version.version }, version.version, " \xB7 ", version.released ? label("\u66FE\u53D1\u5E03", "Released") : label("\u5F00\u53D1\u4E2D", "In development"), version.pull_request?.number && /* @__PURE__ */ React.createElement(React.Fragment, null, " \xB7 ", /* @__PURE__ */ React.createElement("a", { href: `${repository}/pull/${version.pull_request.number}`, target: "_blank", rel: "noreferrer" }, "PR")))), trials.filter((trial) => trial.build.issue_numbers.includes(issue.number)).map((trial) => /* @__PURE__ */ React.createElement("p", { key: trial.build.id }, label("\u8BD5\u7528", "Trials"), " \xB7 ", trial.build.version, " \xB7 ", trial.verified_count, "/", trial.required_count)), operations.filter((item) => item.build.issue_numbers.includes(issue.number) || item.expected?.issue_numbers.includes(issue.number)).map((item) => /* @__PURE__ */ React.createElement("p", { key: item.request.id }, item.request.kind, " \xB7 ", item.build.version))))), !!operations.length && /* @__PURE__ */ React.createElement("details", { className: "autoloop-project" }, /* @__PURE__ */ React.createElement("summary", null, label("\u53D1\u5E03\u4E0E\u56DE\u9000\u8BB0\u5F55", "Release and rollback history")), operations.slice().reverse().map((item) => /* @__PURE__ */ React.createElement("p", { key: item.request.id }, item.request.kind, " \xB7 ", /* @__PURE__ */ React.createElement(
+        "a",
+        {
+          href: `${repository}/releases/tag/${encodeURIComponent(item.build.version)}`,
+          target: "_blank",
+          rel: "noreferrer"
+        },
+        item.build.version
+      )))), !!product.recent_runs.length && /* @__PURE__ */ React.createElement("details", { className: "autoloop-project", open: true }, /* @__PURE__ */ React.createElement("summary", null, label("\u8FD0\u884C\u4E0E\u751F\u6210\u5236\u54C1", "Workflow runs and artifacts")), product.recent_runs.slice().reverse().map((run) => /* @__PURE__ */ React.createElement("div", { key: run.id }, /* @__PURE__ */ React.createElement("p", null, run.build.version, " \xB7 ", run.id.slice(0, 8), " \xB7 ", run.status), run.open_url && /* @__PURE__ */ React.createElement("p", { className: "autoloop-project-actions" }, /* @__PURE__ */ React.createElement("a", { href: run.open_url, target: "_blank", rel: "noreferrer" }, label("\u6253\u5F00\u5C0F\u5DE5\u5177", "Open tool")), /* @__PURE__ */ React.createElement("a", { href: run.download_url }, label("\u7F51\u9875 ZIP", "Web ZIP")), run.miniapp_url && /* @__PURE__ */ React.createElement("a", { href: run.miniapp_url }, label("\u5C0F\u7EA2\u4E66\u5C0F\u7A0B\u5E8F ZIP", "Xiaohongshu Mini App ZIP"))), run.error && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error" }, run.error)))));
+    }
+    return function ManagedProducts({ session, chinese }) {
+      const label = (zh, en) => chinese ? zh : en;
+      const path = productPath(session);
+      const { value, error } = usePoll(React, path);
+      const [selected, setSelected] = React.useState();
+      const [busy, setBusy] = React.useState(false);
+      const [errorAction, setErrorAction] = React.useState();
+      const product = value?.products.find((item) => item.repository_id === selected) ?? value?.products[0];
+      const actor = value?.actor;
+      const canReview = product && [product.roles.pm, product.roles.chief].includes(actor?.id ?? "");
+      const target = product?.delivery.current["ds-bot-local"];
+      const version = product?.versions.findLast((item) => !item.released);
+      async function submit(body) {
+        setBusy(true);
+        setErrorAction(void 0);
+        try {
+          await request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        } catch (problem) {
+          setErrorAction(problem instanceof Error ? problem.message : String(problem));
+        } finally {
+          setBusy(false);
+        }
+      }
+      return /* @__PURE__ */ React.createElement("section", { className: "autoloop-scroll autoloop-catalog autoloop-managed", "aria-label": label("\u4EA7\u54C1", "Products") }, (error || errorAction) && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, errorAction ?? error), !value && !error && /* @__PURE__ */ React.createElement("p", { className: "autoloop-muted" }, label("\u6B63\u5728\u8BFB\u53D6\u4EA7\u54C1\u2026", "Loading products\u2026")), product && value && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("label", { className: "autoloop-managed-select" }, label("\u4EA7\u54C1", "Product"), /* @__PURE__ */ React.createElement("select", { value: product.repository_id, onChange: (event) => setSelected(Number(event.currentTarget.value)) }, value.products.map((item) => /* @__PURE__ */ React.createElement("option", { key: item.repository_id, value: item.repository_id }, item.title)))), /* @__PURE__ */ React.createElement("article", { className: "autoloop-project" }, /* @__PURE__ */ React.createElement("h3", null, product.title), /* @__PURE__ */ React.createElement("p", null, product.repository), /* @__PURE__ */ React.createElement("p", null, label("\u9ED8\u8BA4\u5DE5\u4F5C\u6D41", "Default workflow"), " \xB7 ", target?.version ?? label("\u5F85\u53D1\u5E03", "Unreleased"), target && /* @__PURE__ */ React.createElement("code", { title: target.artifact_sha256 }, " \xB7 ", target.artifact_sha256.slice(0, 12))), product.delivery.pending && /* @__PURE__ */ React.createElement("p", { role: "status" }, label("\u53D1\u5E03\u64CD\u4F5C", "Delivery operation"), " \xB7 ", product.delivery.pending.stage), product.sync_error && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, product.sync_error)), canReview && version && /* @__PURE__ */ React.createElement(WorkflowPlan, { product, version, session, label, submit, busy }), /* @__PURE__ */ React.createElement(ProductHistory, { product, canReview: canReview === true, label, submit, busy })), value && !product && /* @__PURE__ */ React.createElement("p", { className: "autoloop-muted" }, label("\u6B64 Bot \u6682\u672A\u5173\u8054\u4EA7\u54C1\u3002", "This Bot has no bound products.")), actor?.chief && /* @__PURE__ */ React.createElement(ChiefSetup, { session, bots: value?.setup_bots ?? [], label, submit, busy }));
+    };
+  }
+  function repositoryLink(product) {
+    return `https://github.com/${product.repository.split("/").map(encodeURIComponent).join("/")}`;
+  }
+
   // ui/panel.css
   var panel_default = `.autoloop-panel, .autoloop-chat {
   --loop-paper: var(--dsw-alias-bg-layer-1, #fff); --loop-ink: var(--dsw-alias-label-primary, #1d1d1f);
@@ -694,7 +814,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
 }
 .autoloop-fold { height: 30px; width: 30px; line-height: 1; font-size: 21px; flex: none; border-radius: 50%; color: var(--loop-sub); }
 .autoloop-fold:hover, .autoloop-project-actions > button:hover, .autoloop-file-path button:hover { background: var(--loop-paper); color: var(--loop-blue); }
-.autoloop-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin-top: 16px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--loop-ink) 7%, transparent); }
+.autoloop-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin-top: 16px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--loop-ink) 7%, transparent); }
 .autoloop-nav button { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 2px; color: var(--loop-sub); background: transparent; border: 1px solid transparent; border-radius: 8px; font: inherit; font-weight: 550; cursor: pointer; white-space: nowrap; }
 .autoloop-nav button:hover { color: var(--loop-ink); }
 .autoloop-nav button[aria-pressed=true] { background: var(--loop-paper); color: var(--loop-ink); border-color: var(--loop-line); box-shadow: 0 1px 3px #20273c1b; font-weight: 670; }
@@ -711,6 +831,16 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
 .autoloop-empty h3 { font-size: 16px; letter-spacing: -.02em; }
 .autoloop-empty p { margin-top: 7px; color: var(--loop-sub); }
 .autoloop-catalog { display: flex; flex-direction: column; gap: 12px; }
+.autoloop-managed summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
+.autoloop-managed details { padding-bottom: 11px; }
+.autoloop-managed form { display: grid; gap: 8px; margin: 12px 0; }
+.autoloop-managed label:not(:has(input[type=checkbox])) { display: grid; gap: 3px; }
+.autoloop-managed input:not([type=checkbox]), .autoloop-managed select { min-width: 0; width: 100%; padding: 4px;
+  border: 1px solid var(--loop-line); border-radius: 5px; background: var(--loop-paper); color: var(--loop-ink); }
+.autoloop-managed button { border: 1px solid var(--loop-line); border-radius: 5px; padding: 4px 7px; color: var(--loop-blue); background: var(--loop-paper); cursor: pointer; }
+.autoloop-managed button:disabled { opacity: .55; cursor: default; }
+.autoloop-managed a { color: var(--loop-blue); overflow-wrap: anywhere; }
+.autoloop-managed-issue { margin-top: 8px; }
 .autoloop-project { padding: 15px 15px 4px; border: 1px solid var(--loop-line); border-radius: 15px; background: var(--loop-card); box-shadow: var(--loop-shadow); }
 .autoloop-project[data-draft-project] { padding-bottom: 14px; }
 .autoloop-project.autoloop-clarification { padding-bottom: 14px; }
@@ -927,6 +1057,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
       overview: "\u9879\u76EE",
       inbox: "\u6536\u4EF6\u7BB1",
       files: "\u6587\u4EF6",
+      managed: "\u4EA7\u54C1",
       fold: "\u6298\u53E0\u53F3\u680F",
       openPanel: "\u6253\u5F00\u9762\u677F",
       projectId: "\u9879\u76EE \xB7 {id}",
@@ -1061,6 +1192,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
       overview: "Projects",
       inbox: "Inbox",
       files: "Files",
+      managed: "Products",
       fold: "Collapse sidebar",
       openPanel: "Open panel",
       projectId: "Project \xB7 {id}",
@@ -1191,6 +1323,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
   var panelPath = (session) => "panel?" + new URLSearchParams({ session_id: session });
   var blocked = /* @__PURE__ */ new Set(["BLOCKED", "FAILED"]);
   function registerPanel(React, ctx, notices) {
+    const ManagedProducts = createManagedProductPanel(React);
     const ActionButtons = createActionButtons(React);
     const DraftRetry = createDraftRetry(React);
     const { NoticeDetails, useProjectNotices, WebsiteLink } = notices;
@@ -1349,12 +1482,13 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
     function Panel({ t: t2, session }) {
       const projectNotices = useProjectNotices(session);
       const { value, error } = usePoll(React, panelPath(session));
-      const [tab, setTab] = React.useState("overview");
+      const [selectedTab, setTab] = React.useState();
       const [fileProject, setFileProject] = React.useState();
       const [planProject, setPlanProject] = React.useState();
       const [issueDeleteError, setIssueDeleteError] = React.useState();
       if (!value) return /* @__PURE__ */ React.createElement("div", { className: "autoloop-panel", role: error ? "alert" : "status" }, error ?? t2("loading"));
       const { snapshot, projects, inbox, role, draft, live, pm_project_id: pmProjectId } = value;
+      const tab = selectedTab ?? (role ? "overview" : "managed");
       const clarification = role === "chief" ? value.clarification : null;
       const current = projects.find((project) => project.id === snapshot.dag.project_id);
       const files = projects.find((project) => project.id === fileProject) ?? current;
@@ -1371,7 +1505,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
       return /* @__PURE__ */ React.createElement("aside", { className: "autoloop-panel", "aria-label": t2("tab"), "data-role": role, "data-pm-project": pmProjectId }, /* @__PURE__ */ React.createElement("header", { className: "autoloop-top" }, /* @__PURE__ */ React.createElement("div", { className: "autoloop-line" }, /* @__PURE__ */ React.createElement("div", { className: "autoloop-heading" }, /* @__PURE__ */ React.createElement("i", { className: "autoloop-mark", "aria-hidden": "true" }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", null, role === "pm" ? current?.name ?? draft?.title ?? PM_NAME : t2("console")), /* @__PURE__ */ React.createElement("p", null, role === "pm" ? pmCaption : t2("projectCount", { count: projects.length + Number(Boolean(draft)) + Number(Boolean(clarification)) })))), role === "pm" && current?.plan && /* @__PURE__ */ React.createElement("button", { className: "autoloop-pm-plan", type: "button", onClick: () => tab === "plan" ? setTab("overview") : openPlan(current.id) }, t2(tab === "plan" ? "closePlan" : "openPlan")), /* @__PURE__ */ React.createElement("button", { type: "button", className: "autoloop-fold", "aria-label": t2("fold"), onClick: () => {
         localStorage.setItem(FOLDED, "1");
         ctx.sidebarRight.toggleExpanded();
-      } }, "\u203A")), /* @__PURE__ */ React.createElement("nav", { className: "autoloop-nav", "aria-label": t2("tab") }, ["overview", "inbox", "files"].map((next) => /* @__PURE__ */ React.createElement(
+      } }, "\u203A")), /* @__PURE__ */ React.createElement("nav", { className: "autoloop-nav", "aria-label": t2("tab") }, ["overview", "inbox", "files", "managed"].map((next) => /* @__PURE__ */ React.createElement(
         "button",
         {
           type: "button",
@@ -1382,7 +1516,7 @@ ${temporary(name)}` : "") + "\n\u4F60\u662F\u5F53\u524D Autoloop \u9879\u76EE\u7
         /* @__PURE__ */ React.createElement("i", { className: "autoloop-tab-icon", "data-kind": next, "aria-hidden": "true" }),
         t2(next),
         next === "inbox" && pending > 0 && /* @__PURE__ */ React.createElement("small", null, pending)
-      )))), error && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, error), tab === "plan" && selectedPlan?.plan ? /* @__PURE__ */ React.createElement(
+      )))), error && /* @__PURE__ */ React.createElement("p", { className: "autoloop-error", role: "alert" }, error), tab === "managed" ? /* @__PURE__ */ React.createElement(ManagedProducts, { session, chinese: t2("managed") === "\u4EA7\u54C1" }) : tab === "plan" && selectedPlan?.plan ? /* @__PURE__ */ React.createElement(
         ProjectPlanView,
         {
           key: selectedPlan.id,

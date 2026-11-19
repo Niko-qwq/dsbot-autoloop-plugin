@@ -5,6 +5,7 @@ import type { ProjectPlan } from './plan';
 import { previewHref, registerNotices } from './notices';
 import { syncProjectPMs } from './project_pm';
 import type { ProjectPM } from './project_pm';
+import { createManagedProductPanel } from './managed_product';
 import styles from './panel.css';
 
 const ID = 'dsbot-autoloop-plugin';
@@ -15,7 +16,7 @@ const FILE_CACHE_PATHS = 8;
 const dictionaries = {
   zh: {
     tab: 'Autoloop', description: '项目总台与 Worker 进度', console: '项目总台', worker: 'Worker 时间轴', stages: '任务分组',
-    overview: '项目', inbox: '收件箱', files: '文件', fold: '折叠右栏', openPanel: '打开面板', projectId: '项目 · {id}',
+    overview: '项目', inbox: '收件箱', files: '文件', managed: '产品', fold: '折叠右栏', openPanel: '打开面板', projectId: '项目 · {id}',
     pending: '待进行', done: '已完成', blocked: '阻塞', working: '{count} 个运行中', tasksDone: '{done}/{total} 项完成',
     projectCount: '{count} 个项目', duration: '用时 {count} 秒',
     budget: 'DSH 预算', empty: '还没有项目', emptyBody: '在 Chief 聊天中说「用 Autoloop 创建项目，目标是…」。',
@@ -65,7 +66,7 @@ const dictionaries = {
   },
   en: {
     tab: 'Autoloop', description: 'Projects and Worker activity', console: 'Project desk', worker: 'Worker timeline', stages: 'Tasks',
-    overview: 'Projects', inbox: 'Inbox', files: 'Files', fold: 'Collapse sidebar', openPanel: 'Open panel', projectId: 'Project · {id}',
+    overview: 'Projects', inbox: 'Inbox', files: 'Files', managed: 'Products', fold: 'Collapse sidebar', openPanel: 'Open panel', projectId: 'Project · {id}',
     pending: 'To do', done: 'Done', blocked: 'Blocked', working: '{count} running', tasksDone: '{done}/{total} done',
     projectCount: '{count} projects', duration: '{count}s elapsed',
     budget: 'DSH budget', empty: 'No projects', emptyBody: 'Ask Chief to start an Autoloop project in chat.',
@@ -145,6 +146,7 @@ const panelPath = (session: string) => 'panel?' + new URLSearchParams({ session_
 const blocked = new Set(['BLOCKED', 'FAILED']);
 
 function registerPanel(React: typeof import('react'), ctx: ClientContext, notices: ReturnType<typeof registerNotices>) {
+  const ManagedProducts = createManagedProductPanel(React);
   const ActionButtons = createActionButtons(React);
   const DraftRetry = createDraftRetry(React);
   const { NoticeDetails, useProjectNotices, WebsiteLink } = notices;
@@ -356,12 +358,13 @@ function registerPanel(React: typeof import('react'), ctx: ClientContext, notice
   function Panel({ t, session }: { t: Translate; session: string }) {
     const projectNotices = useProjectNotices(session);
     const { value, error } = usePoll<PanelData>(React, panelPath(session));
-    const [tab, setTab] = React.useState<'overview' | 'inbox' | 'files' | 'plan'>('overview');
+    const [selectedTab, setTab] = React.useState<'overview' | 'inbox' | 'files' | 'plan' | 'managed'>();
     const [fileProject, setFileProject] = React.useState<string>();
     const [planProject, setPlanProject] = React.useState<string>();
     const [issueDeleteError, setIssueDeleteError] = React.useState<{ projectId: string; message: string }>();
     if (!value) return <div className="autoloop-panel" role={error ? 'alert' : 'status'}>{error ?? t('loading')}</div>;
     const { snapshot, projects, inbox, role, draft, live, pm_project_id: pmProjectId } = value;
+    const tab = selectedTab ?? (role ? 'overview' : 'managed');
     const clarification = role === 'chief' ? value.clarification : null;
     const current = projects.find(project => project.id === snapshot.dag.project_id);
     const files = projects.find(project => project.id === fileProject) ?? current;
@@ -391,12 +394,13 @@ function registerPanel(React: typeof import('react'), ctx: ClientContext, notice
           }}>›</button>
         </div>
         <nav className="autoloop-nav" aria-label={t('tab')}>
-          {(['overview', 'inbox', 'files'] as const).map(next => <button type="button" key={next} aria-pressed={next === tab || (next === 'overview' && tab === 'plan')}
+          {(['overview', 'inbox', 'files', 'managed'] as const).map(next => <button type="button" key={next} aria-pressed={next === tab || (next === 'overview' && tab === 'plan')}
             onClick={() => setTab(next)}><i className="autoloop-tab-icon" data-kind={next} aria-hidden="true" />{t(next)}{next === 'inbox' && pending > 0 && <small>{pending}</small>}</button>)}
         </nav>
       </header>
       {error && <p className="autoloop-error" role="alert">{error}</p>}
-      {tab === 'plan' && selectedPlan?.plan ? <ProjectPlanView key={selectedPlan.id} project={selectedPlan} t={t} onBack={() => setTab('overview')}
+      {tab === 'managed' ? <ManagedProducts session={session} chinese={t('managed') === '产品'} />
+        : tab === 'plan' && selectedPlan?.plan ? <ProjectPlanView key={selectedPlan.id} project={selectedPlan} t={t} onBack={() => setTab('overview')}
         budget={selectedPlan.id === current?.id && live ? snapshot.budget : null} allowStart={role === 'chief' && selectedPlan.id === current?.id && live} />
         : tab === 'inbox' ? <section className="autoloop-scroll" aria-label={t('inbox')}>
         {issueDeleteError && issueDeleteError.projectId === current?.id && <p className="autoloop-error" role="alert">{issueDeleteError.message}</p>}

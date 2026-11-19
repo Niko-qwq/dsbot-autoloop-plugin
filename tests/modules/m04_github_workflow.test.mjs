@@ -44,6 +44,7 @@ function workflowGitHub() {
         return result({ sha, tree: { sha: sha === BASE ? BASE_TREE : TREE }, parents: [{ sha: BASE }] });
       }
       if (path === '/pulls') {
+        assert.deepEqual(request.permissions, { contents: 'read', pull_requests: 'write' });
         const endpoint = ref => ({ ref, repo: { id: repository.id } });
         remote.pr = { number: 27, state: 'open', body: request.body.body, html_url: 'https://github.com/owner/workflow/pull/27',
           head: { ...endpoint(request.body.head), sha: HEAD }, base: endpoint(request.body.base), merged: false };

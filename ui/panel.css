@@ -27,7 +27,7 @@
 }
 .autoloop-fold { height: 30px; width: 30px; line-height: 1; font-size: 21px; flex: none; border-radius: 50%; color: var(--loop-sub); }
 .autoloop-fold:hover, .autoloop-project-actions > button:hover, .autoloop-file-path button:hover { background: var(--loop-paper); color: var(--loop-blue); }
-.autoloop-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin-top: 16px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--loop-ink) 7%, transparent); }
+.autoloop-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin-top: 16px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--loop-ink) 7%, transparent); }
 .autoloop-nav button { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 2px; color: var(--loop-sub); background: transparent; border: 1px solid transparent; border-radius: 8px; font: inherit; font-weight: 550; cursor: pointer; white-space: nowrap; }
 .autoloop-nav button:hover { color: var(--loop-ink); }
 .autoloop-nav button[aria-pressed=true] { background: var(--loop-paper); color: var(--loop-ink); border-color: var(--loop-line); box-shadow: 0 1px 3px #20273c1b; font-weight: 670; }
@@ -44,6 +44,16 @@
 .autoloop-empty h3 { font-size: 16px; letter-spacing: -.02em; }
 .autoloop-empty p { margin-top: 7px; color: var(--loop-sub); }
 .autoloop-catalog { display: flex; flex-direction: column; gap: 12px; }
+.autoloop-managed summary { cursor: pointer; font-weight: 650; overflow-wrap: anywhere; }
+.autoloop-managed details { padding-bottom: 11px; }
+.autoloop-managed form { display: grid; gap: 8px; margin: 12px 0; }
+.autoloop-managed label:not(:has(input[type=checkbox])) { display: grid; gap: 3px; }
+.autoloop-managed input:not([type=checkbox]), .autoloop-managed select { min-width: 0; width: 100%; padding: 4px;
+  border: 1px solid var(--loop-line); border-radius: 5px; background: var(--loop-paper); color: var(--loop-ink); }
+.autoloop-managed button { border: 1px solid var(--loop-line); border-radius: 5px; padding: 4px 7px; color: var(--loop-blue); background: var(--loop-paper); cursor: pointer; }
+.autoloop-managed button:disabled { opacity: .55; cursor: default; }
+.autoloop-managed a { color: var(--loop-blue); overflow-wrap: anywhere; }
+.autoloop-managed-issue { margin-top: 8px; }
 .autoloop-project { padding: 15px 15px 4px; border: 1px solid var(--loop-line); border-radius: 15px; background: var(--loop-card); box-shadow: var(--loop-shadow); }
 .autoloop-project[data-draft-project] { padding-bottom: 14px; }
 .autoloop-project.autoloop-clarification { padding-bottom: 14px; }
