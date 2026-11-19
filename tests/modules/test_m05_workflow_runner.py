@@ -24,10 +24,10 @@ def freeze(tmp_path, name, kind, labels, **tool_options):
     return load_workflow(frozen.payload, expected_digest=frozen.digest)
 
 
-def execute_browser_script(script, dataset, fields):
+def execute_browser_script(script, dataset, fields, *, reset=False):
     """Run the generated JS against the same form and output surface used by the entry."""
     harness = """
-const [script, dataset, fields] = process.argv.slice(1);
+const [script, dataset, fields, reset] = process.argv.slice(1);
 const values = JSON.parse(fields);
 const handlers = {};
 const form = {
@@ -40,10 +40,15 @@ globalThis.document = { querySelector: tag => tag === 'form' ? form : output };
 await import('data:text/javascript;base64,' + Buffer.from(script).toString('base64'));
 if (form.dataset.kind === 'checklist') values[0].checked = true;
 handlers.input();
+if (reset === 'true') {
+  handlers.reset();
+  for (const value of values) value.checked = false;
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
 process.stdout.write(output.textContent);
 """
     return subprocess.run([
-        "node", "--input-type=module", "-e", harness, script, json.dumps(dataset), json.dumps(fields),
+        "node", "--input-type=module", "-e", harness, script, json.dumps(dataset), json.dumps(fields), json.dumps(reset),
     ], check=True, capture_output=True, text=True).stdout
 
 
@@ -103,6 +108,7 @@ def test_run_uses_pinned_workflow_and_returns_openable_bundle_after_sources_are_
         assert set(archive.namelist()) == {"index.html", "tool.js", "tool.css", "materials.json", "README.md"}
     script = (tmp_path / "run-b" / "tool.js").read_text(encoding="utf-8")
     assert execute_browser_script(script, {"kind": "checklist"}, [{"checked": False}] * 3) == "已完成 1 / 3"
+    assert execute_browser_script(script, {"kind": "checklist"}, [{"checked": False}] * 3, reset=True) == "已完成 0 / 3"
     path = tmp_path / "run-b" / NATIVE_ARCHIVE
     native = execute_native_page(path, [["toggleField", 0], ["toggleField", 2], ["toggleField", 99], ["reset"]])
     assert native["title"] == idea
