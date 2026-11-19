@@ -1,6 +1,6 @@
 {
   "name": "dsbot-autoloop-plugin",
-  "version": "0.4.0-rc.3",
+  "version": "0.4.0-rc.5",
   "private": true,
   "description": "Local project planning, execution, acceptance, and reporting for DS Bot",
   "type": "module",

@@ -536,7 +536,8 @@ class VersionPlans:
                        '最小清单 {"schema":1,"title":"小工具生产","steps":["research","generate","validate","package"],'
                        '"tool":{"kind":"checklist","labels":["检查输入","核对结果"]},'
                        '"allowed_kinds":["checklist","calculator","template"],"resources":[]}。'
-                       "请先调研，核对声明与测试预期，再生成清单及回归用例。工作流执行器由插件提供，使用 Bot 在发布后提交小工具 Idea。")
+                       "请先调研，核对声明与测试预期，再生成清单及回归用例。工作流执行器由插件提供，使用 Bot 在发布后提交小工具 Idea。"
+                       "研发 DAG 只安排调研、实现和回归验证，终点是 PM 验收工作流文件。候选冻结、真实试用、发布和回退由产品命令在 DAG 完成后处理，不能成为 DAG 内的任务或完成条件。")
         request = PrepareProject.model_validate({
             "session_id": session, "route": args["route"], "goal": f"{goal}\n\n{instruction}",
             "max_budget_usd": product["grant"]["budget"],

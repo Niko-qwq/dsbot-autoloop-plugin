@@ -174,8 +174,28 @@ class ManagedProducts:
                                        verdict=args["verdict"], evidence_refs=[f"human:{source}"], verifier_id=actor)
                 self.store.put(state, product)
                 return self.view(product)
+            if operation == "check_trial":
+                authorize(product, actor, "chief")
+                if not human:
+                    raise ProductForbidden("Start an objective trial check from the authenticated Chief client")
+                return self.check_trial(state, product, args)
             authorize(product, actor, "pm", "chief" if operation in ("plan", "sync", "issue") else "pm")
             return await self.manage(state, product, args)
+
+    def check_trial(self, state, product, args):
+        from runtime.product_trials import verify_trial
+        from runtime.workflow_rule_verify import verify_generated_tool
+        run = product["runs"].get(args["run_id"])
+        if not run or run["status"] != "completed" or run["candidate_id"] != args["build_id"]:
+            raise ProductError("Choose an actual completed run on this frozen candidate")
+        output = self.product_dir(product["repository_id"]) / "runs" / run["id"] / str(run["attempt"])
+        evidence = verify_generated_tool(output, args["expectation"], expected_manifest_digest=run["manifest_sha256"],
+                                         expected_workflow_digest=run["build"]["artifact_sha256"])
+        verify_trial(product, args["build_id"], run_id=run["id"], verifier_kind="rule", verdict="pass",
+                     evidence_refs=[f"objective:{run['id']}:{evidence['sha256']}"], verifier_id="autoloop-offline-tool-v1")
+        run["objective_check"] = evidence
+        self.store.put(state, product)
+        return {"run_id": run["id"], "evidence": evidence}
 
     async def report_issue(self, state, product, source, args):
         if not source:

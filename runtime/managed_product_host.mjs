@@ -29,8 +29,9 @@ const operations = {
   continue_delivery: [['repository_id'], []],
   attach: [['owner', 'name', 'title', 'pm', 'usage', 'budget', 'confirmed'], ['rollback', 'create', 'account_type']],
   start: [['repository_id', 'version'], []], accept_trial: [['repository_id', 'build_id', 'run_id', 'verdict'], []],
+  check_trial: [['repository_id', 'build_id', 'run_id', 'expectation'], []],
 };
-const humanOnly = new Set(['attach', 'start', 'accept_trial']);
+const humanOnly = new Set(['attach', 'start', 'accept_trial', 'check_trial']);
 const userTurnOnly = new Set(['run', 'report_issue']);
 const boolean = { type: 'boolean' };
 const fields = {
@@ -42,6 +43,11 @@ const fields = {
   owner: text, name: text, pm: text, usage: text, budget: { type: 'number', minimum: 0.01, maximum: 10000 },
   confirmed: boolean, rollback: boolean, create: boolean, account_type: choice('personal', 'organization'),
   verdict: choice('pass', 'fail'),
+  expectation: { type: 'object', additionalProperties: false, required: ['kind', 'labels', 'cases'], properties: {
+    kind: choice('checklist', 'calculator', 'template'), labels: { type: 'array', items: text },
+    cases: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['inputs', 'output'],
+      properties: { inputs: { type: 'array', items: { oneOf: [boolean, text] } }, output: text } } },
+  } },
 };
 
 function parameters(isBrowser) {
