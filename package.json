@@ -1,0 +1,63 @@
+{
+  "name": "dsbot-autoloop-plugin",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Local project planning, execution, acceptance, and reporting for DS Bot",
+  "type": "module",
+  "engines": {
+    "node": ">=24",
+    "dsh": "0.2.2-rc.3"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "plugin_entry.py",
+    "api/*.py",
+    "config/*.py",
+    "core/*.py",
+    "runtime/*.mjs",
+    "runtime/*.py",
+    "skills",
+    "ui",
+    "AGENTS.md",
+    "SPEC.md",
+    "requirements.txt"
+  ],
+  "scripts": {
+    "build": "esbuild ui/side_panel.tsx --bundle --loader:.css=text --platform=browser --format=iife --jsx-factory=React.createElement --outfile=client.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-fs": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-fs-search": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-skill": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tool-web": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/schemastery": "^3.19.0",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}

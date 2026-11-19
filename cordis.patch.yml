@@ -1,0 +1,22 @@
+- insert:
+    - id: dsbot-autoloop-pm-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: autoloop-pm
+        name: Autoloop PM
+        description: Read-only tools for planning and triaging Autoloop projects
+        order: 100
+        plugins:
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              write: false
+              edit: false
+              applyPatch: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+    - id: dsbot-autoloop
+      name: dsbot-autoloop-plugin
+      config: {}
