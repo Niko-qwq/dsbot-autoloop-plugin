@@ -7,18 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { assertObjectJsonSchema, defineTool, ToolArgsError, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import Schema from '@deepseek-ai/schemastery';
 import { z } from 'zod';
-import { DshPM, READ_TOOLS } from './runtime/dsh_pm.mjs';
+import { DshPM } from './runtime/dsh_pm.mjs';
 import { makeNoticeFeed } from './runtime/notice_feed.mjs';
 import { createProjectPreview } from './runtime/project_preview.mjs';
 import { installChiefNativeDelivery } from './runtime/chief_delivery.mjs';
 import { bindChiefTaskActions } from './runtime/chief_actions.mjs';
 import { installChiefContext } from './runtime/chief_context.mjs';
-import { CHIEF_READ_TOOLS, installChiefReaders, isReadVariant } from './runtime/chief_readers.mjs';
+import { installChiefReaders } from './runtime/chief_readers.mjs';
 
 export const name = 'dsbot-autoloop-plugin';
 export const inject = [
   'connection', 'tools', 'llm', 'tokenMeter', 'skills', 'systemPrompt', 'sessionProjections', 'agents', 'subagents',
-  'sessionPersistence', 'sandboxPolicy', 'permissionPresets',
+  'sessionPersistence',
   'sessions', 'sessionController', 'sessionQuery',
 ];
 
@@ -35,11 +35,6 @@ const DETAILS = 'autoloop_get_status';
 const TASK_ACTION = 'autoloop_task_action';
 const PROPOSE_PM_PLAN = 'autoloop_propose_plan_change';
 const PROJECT_PM_MARKER = /^\[Autoloop PM project:([\w-]{1,100})\](?:\n|$)/;
-const CHIEF_TOOLS = new Set([
-  ...CHIEF_READ_TOOLS, TOOL, FEEDBACK, STATUS, DETAILS, TASK_ACTION, 'ask_user', 'show_view',
-  'project_engine_query', 'project_engine_diagnose',
-]);
-const PM_TOOLS = new Set([...READ_TOOLS, STATUS, PROPOSE_PM_PLAN, 'ask_user']);
 const PM_PROMPT = [
   'You are the planning partner for this project. Answer progress questions in chat. When the user critiques a result or raises a new need, first clarify the desired effect, constraints worth keeping, and observable acceptance. Discuss concrete options and their tradeoffs in chat. Ask a focused question only when its answer will change the approach.',
   'If autoloop_status shows a failed project draft, direct the user to Retry planning on that draft. The action reuses the saved brief and project ID.',
@@ -49,7 +44,7 @@ const PM_PROMPT = [
   'The proposal is shown in this conversation for the user to confirm. Summarize what changes and what they can inspect once delivered. The confirmation card applies the proposal to the project. The project inbox is for feedback forwarded from Chief or other intake channels.',
 ].join('\n');
 const CHIEF_PROMPT = [
-  'When the user asks you to look something up, use your read tools before asking for a path or link. Use recall and list_capabilities for prior work and shared workflows, skill for a catalogued workflow, glob and grep to find local evidence, read or read_image to inspect it, and web_search or web_fetch for public sources. Follow up with a focused question if the lookup leaves multiple plausible matches. Use only the read actions of multi-action tools. Route project changes and execution through the coordination tools.',
+  'When the user asks you to look something up, use your read tools before asking for a path or link. Use recall and list_capabilities for prior work and shared workflows, skill for a catalogued workflow, glob and grep to find local evidence, read or read_image to inspect it, and web_search or web_fetch for public sources. Follow up with a focused question if the lookup leaves multiple plausible matches. Use the Autoloop tools to coordinate project plans and execution.',
   'Chief owns project intake. Establish the goal, the experience the user wants, the deliverable, and what counts as done. When the brief leaves a decision that materially changes the outcome, ask before planning or inspecting files. Lead with your understanding, then use native ask_user in the same turn. Ask the highest-impact unanswered question and offer concrete choices that describe visible effects. Allow the user to write their own answer. The answer comes back in the next turn; carry it into the brief and avoid asking for information already given. Ask a short question in the reply for group chats.',
   'On a native project clarification, set ask_user detail to "立项澄清 · <short project title>" in Chinese or "Project clarification · <short project title>" in English. This surfaces the open decision in the Chief project desk. Once the brief can support a useful plan, proceed and state any sensible assumptions.',
   'The Autoloop tools are the handoff channel for project work. When the brief is ready, call autoloop_prepare_project once. Give the project PM a short, memorable name in the conversation language that fits the project, like 猫队长 for a cat game. Follow a name already given by the user. A QUEUED or PLANNING receipt means the brief has been accepted for PM planning. Finish the same turn with a useful scope and acceptance summary and where the user will confirm the plan. The live card follows the background planning and offers confirmation when the draft is ready.',
@@ -396,7 +391,6 @@ export async function apply(ctx, input = {}) {
   const readBotState = () => readIfPublished(statePath);
   const bindingOf = id => id ? botBinding(readBotState(), id) : undefined;
   const roleOf = id => bindingOf(id)?.role;
-  const allowed = role => role === 'chief' ? CHIEF_TOOLS : role === 'pm' ? PM_TOOLS : undefined;
   const runtime = startRuntime(ctx, config, dataDir, readBotState);
   const disposers = [];
   const taskActions = bindChiefTaskActions(ctx, roleOf);
@@ -491,29 +485,6 @@ export async function apply(ctx, input = {}) {
     disposers.push(ctx.on('session/event', (session, event) => {
       if (event.type === 'turn/end' && roleOf(session.id) === 'chief') queueMicrotask(() => void feed.refresh());
     }));
-    disposers.push(ctx.tools.guard(exec => {
-      const role = roleOf(exec.agent?.id);
-      const tools = allowed(role);
-      if (tools && (!tools.has(exec.name) || (role === 'chief' && !isReadVariant(exec.name, exec.arguments)))) {
-        return 'Use this role’s read-only actions or Autoloop coordination tools.';
-      }
-    }));
-    const pmTurnRules = new Map();
-    disposers.push(() => {
-      for (const release of pmTurnRules.values()) release();
-      pmTurnRules.clear();
-    });
-    disposers.push(ctx.on('agent/inbox/claimed', ({ agent }) => {
-      if (roleOf(agent.id) !== 'pm' || pmTurnRules.has(agent.session)) return;
-      const names = ctx.tools.definitions().map(tool => tool.name).filter(name => PM_TOOLS.has(name));
-      pmTurnRules.set(agent.session, agent.ctx.tools.restrict({ allow: names }));
-    }));
-    disposers.push(ctx.on('session/event', (session, event) => {
-      if (event.type !== 'turn/end') return;
-      const release = pmTurnRules.get(session);
-      pmTurnRules.delete(session);
-      release?.();
-    }));
     disposers.push(ctx.systemPrompt.section({
       name: 'autoloop-coordination', order: 690, interpolate: false,
       text: ({ agent }) => {
@@ -566,7 +537,10 @@ export async function apply(ctx, input = {}) {
     }
     const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] };
     const chief = ({ agent }) => roleOf(agent?.id) === 'chief';
-    const coordinator = ({ agent }) => allowed(roleOf(agent?.id)) !== undefined;
+    const coordinator = ({ agent }) => {
+      const role = roleOf(agent?.id);
+      return role === 'chief' || role === 'pm';
+    };
     disposers.push(ctx.tools.register(defineTool({
       name: TOOL,
       description: 'Queue one clear new project brief for PM planning and return its receipt immediately. The chat card tracks planning and presents the confirmation action once the draft is validated.',
@@ -620,7 +594,7 @@ export async function apply(ctx, input = {}) {
       parameters: {}, output,
       async execute(_args, { agent, signal }) {
         const binding = bindingOf(agent?.id);
-        if (!allowed(binding?.role)) throw new Error('Read Autoloop status from Chief or PM');
+        if (!coordinator({ agent })) throw new Error('Read Autoloop status from Chief or PM');
         if (binding.role === 'pm') {
           const { status, data } = await runtime.call({
             method: 'GET', path: 'pm-status', session_id: agent.session.id, project_id: binding.projectId,

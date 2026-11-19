@@ -24,7 +24,6 @@ test('PM budgets every model request, including later tool results, before provi
   let calls = 0;
   const ctx = {
     on: () => () => {},
-    tools: { guard: () => () => {} },
     tokenMeter: { measure: measured => {
       assert.equal(measured, session);
       return { totalTokens: tokens };
@@ -62,7 +61,6 @@ test('large Chinese file reads and parallel results fit the PM request without e
   const hooks = new Map();
   const ctx = {
     on: (event, listener) => (hooks.set(event, listener), () => {}),
-    tools: { guard: () => () => {} },
     tokenMeter: { measure: () => ({ totalTokens: 30_805 }) },
   };
   const pm = new DshPM(ctx, () => 0);
@@ -101,19 +99,16 @@ test('large Chinese file reads and parallel results fit the PM request without e
   assert.match(exhausted.content[0].text, /PM evidence budget reached/);
 });
 
-test('PM recovers a later input overflow once with a fresh read-free child and shared accounting', async () => {
+test('PM recovers a later input overflow once with a fresh child and shared accounting', async () => {
   const hooks = new Map();
   const attempts = [];
   const route = { provider: 'mock', model: 'mock', reasoning_effort: 'high' };
   let providerCalls = 0;
   let disposed = 0;
-  let guard;
   const ctx = {
     on: (event, listener) => (hooks.set(event, listener), () => {}),
-    tools: { guard(listener) { guard = listener; return () => {}; } },
     tokenMeter: { measure: () => ({ totalTokens: 100 }) },
     sessionPersistence: { stat: async () => null },
-    sandboxPolicy: { resolve: () => ({ mode: 'read-only' }) },
     agents: { create: async options => ({
       agent: { id: options.sessionId, session: { header: options.meta } },
       dispose: async () => { disposed++; },
@@ -132,7 +127,6 @@ test('PM recovers a later input overflow once with a fresh read-free child and s
         yield { type: 'finish', reason: { kind: 'stop' } };
       }
       if (runId === 1) {
-        assert.equal(guard({ agent, name: 'read' }), undefined);
         await Array.fromAsync(pm.stream(streamOptions, provider));
         const largeHistory = { role: 'assistant', content: [{ type: 'reasoning', text: '中'.repeat(22_000) }] };
         const next = { ...streamOptions, messages: [...messages, largeHistory] };
@@ -144,9 +138,7 @@ test('PM recovers a later input overflow once with a fresh read-free child and s
           hooks.get('agent/error')({ agent, error });
         }
       } else {
-        assert.match(guard({ agent, name: 'read' }), /read-only/);
-        assert.equal(guard({ agent, name: 'structured_output' }), undefined);
-        assert.match(options.prompt[0].text, /Do not claim to have inspected files/);
+        assert.match(options.prompt[0].text, /previous attempt exceeded the context budget/);
         await Array.fromAsync(pm.stream(streamOptions, provider));
       }
       hooks.get('subagent/end')({ id: agent.id, runId, stopReason: runId === 1 ? 'error' : 'completed' });
@@ -170,13 +162,11 @@ test('PM recovers a later input overflow once with a fresh read-free child and s
 test('task acceptance permits bounded evidence reads and stops on context overflow', async () => {
   const hooks = new Map();
   const route = { provider: 'mock', model: 'mock' };
-  let guard, runCount = 0, providerCalls = 0;
+  let runCount = 0, providerCalls = 0;
   const ctx = {
     on: (event, listener) => (hooks.set(event, listener), () => {}),
-    tools: { guard(listener) { guard = listener; return () => {}; } },
     tokenMeter: { measure: () => ({ totalTokens: 100 }) },
     sessionPersistence: { stat: async () => null },
-    sandboxPolicy: { resolve: () => ({ mode: 'read-only' }) },
     agents: { create: async options => ({ agent: { id: options.sessionId, session: { header: options.meta } }, dispose: async () => {} }) },
     subagents: { async startActivation(options) {
       const runId = ++runCount;
@@ -185,11 +175,9 @@ test('task acceptance permits bounded evidence reads and stops on context overfl
       hooks.get('agent/created')({ agent });
       hooks.get('subagent/start')({ id: agent.id, runId, parentSessionId: options.parent.id, local: true });
       assert.deepEqual(options.outputSchema.required, ['verdict', 'reason', 'checks']);
-      assert.equal(guard({ agent, name: 'read' }), undefined);
-      assert.equal(guard({ agent, name: 'structured_output' }), undefined);
-      assert.match(guard({ agent, name: 'bash' }), /read-only/);
+      assert.equal(options.agentPreset, undefined);
       assert.equal(options.prompt[0].text, 'verify TASK');
-      const request = { ...route, sessionId: agent.id, messages: [{ role: 'user', content: options.prompt }] };
+      const request = { ...route, sessionId: agent.id, tools: [{ name: 'write' }], messages: [{ role: 'user', content: options.prompt }] };
       async function* provider() {
         providerCalls++;
         yield { type: 'usage', usage: { inputTokens: 1 } };

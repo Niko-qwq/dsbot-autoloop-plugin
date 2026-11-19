@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools';
 
 const CHILD = 'autoloop-pm-';
@@ -8,18 +7,13 @@ const RESULT_TOOL = 'structured_output';
 const MAX_PREVIEW_CHARS = 4000;
 export const PM_MAX_INPUT_TOKENS = 32_768;
 const PM_MAX_INPUT_BYTES = 65_536;
-const PM_MAX_READ_CALLS = 12;
 const PM_MAX_READ_RESULT_BYTES = 2_048;
 const PM_MAX_READ_BYTES = 8_192;
 const PM_MIN_READ_RESULT_BYTES = 256;
-export const READ_TOOLS = new Set(['read', 'read_image', 'glob', 'grep']);
+const EVIDENCE_TOOLS = new Set(['read', 'read_image', 'glob', 'grep']);
 const READ_BUDGET_NOTICE = 'PM evidence budget reached. Use the issue and project context to submit structured_output.';
 const READ_EXCERPT_NOTICE = '\n[PM evidence excerpt. Read a smaller relevant range if more evidence is needed.]';
-const NO_WORKSPACE_READS = '\n\nWorkspace tools are unavailable for this request. Submit structured_output directly from the supplied context. Do not claim to have inspected files or verified results. Put any checks required to resolve uncertainties in the task acceptance criteria.';
-
-function allowedTool(name, job) {
-  return (job?.readWorkspace !== false && READ_TOOLS.has(name)) || (name === RESULT_TOOL && !!job?.outputSchema);
-}
+const COMPACT_RETRY = '\n\nThe previous attempt exceeded the context budget. Use the supplied context and keep any additional evidence reads narrowly focused.';
 
 function jsonBytes(value) {
   return Buffer.byteLength(JSON.stringify(value));
@@ -76,9 +70,6 @@ export class DshPM {
         if (!job || agent.session.header.parentSession !== job.parentId) {
           throw new Error('Autoloop PM requires its active project reservation');
         }
-        if (ctx.sandboxPolicy.resolve({ session: agent.session }).mode !== 'read-only') {
-          throw new Error('Autoloop PM requires the native read-only preset');
-        }
         job.agent = agent;
       }),
       ctx.on('agent/pre-step', ({ agent }, next) => {
@@ -103,23 +94,12 @@ export class DshPM {
         const job = this.jobs.get(agent.id);
         if (job?.agent === agent) job.error = error;
       }),
-      ctx.tools.guard(exec => {
-        if (!exec.agent?.id.startsWith(CHILD)) return;
-        const job = this.jobs.get(exec.agent.id);
-        if (!job || !allowedTool(exec.name, job)) {
-          return 'Autoloop PM tools are read-only. Submit the structured PM result.';
-        }
-        if (READ_TOOLS.has(exec.name)) {
-          if (job.readCalls >= PM_MAX_READ_CALLS || PM_MAX_READ_BYTES - job.readBytes < PM_MIN_READ_RESULT_BYTES) {
-            return READ_BUDGET_NOTICE;
-          }
-          job.readCalls++;
-        }
-      }),
       ctx.on('tools/post-execute', async (exec, result, next) => {
-        const decision = await next();
         const job = this.jobs.get(exec.agent?.id);
-        if (!job || !READ_TOOLS.has(exec.name) || decision.kind !== 'accept' || Object.hasOwn(decision, 'value')) {
+        const evidence = EVIDENCE_TOOLS.has(exec.name);
+        if (job && !evidence && exec.name !== RESULT_TOOL) job.nonEvidenceToolRan = true;
+        const decision = await next();
+        if (!job || !evidence || decision.kind !== 'accept' || Object.hasOwn(decision, 'value')) {
           return decision;
         }
         const limit = Math.min(PM_MAX_READ_RESULT_BYTES, PM_MAX_READ_BYTES - job.readBytes);
@@ -142,10 +122,6 @@ export class DshPM {
     if (job.cost >= budget_usd) throw new Error('Autoloop PM exhausted its model budget');
     if (options.provider !== route.provider || options.model !== route.model) {
       throw new Error('Autoloop PM uses a different model than its project budget');
-    }
-    if (options.tools?.some(tool => !allowedTool(tool.name, job))) {
-      yield* this.ctx.llm.stream({ ...options, tools: options.tools.filter(tool => allowedTool(tool.name, job)) });
-      return;
     }
     // The request surface already includes any new file reads and tool results.
     // The byte ceiling also bounds dense text the token heuristic can undercount.
@@ -179,7 +155,8 @@ export class DshPM {
     const key = createHash('sha256').update(request.project_id).digest('hex').slice(0, 24);
     const acceptance = request.mode === 'acceptance';
     const scope = acceptance ? key + '-acceptance-' + randomUUID() : key;
-    const parentId = ROOT + scope;
+    // Earlier roots persist the plugin's read-only sandbox override in their session logs.
+    const parentId = ROOT + 'host-' + scope;
     let id = CHILD + scope + '-' + randomUUID();
     const { output_schema: outputSchema } = request;
     try {
@@ -196,7 +173,7 @@ export class DshPM {
     }
     const job = {
       request, signal, parentId, outputSchema, onProgress, settled: Promise.withResolvers(),
-      finished: Promise.withResolvers(), cost: 0, readCalls: 0, readBytes: 0, hadUsage: false,
+      finished: Promise.withResolvers(), cost: 0, readBytes: 0, hadUsage: false,
       progress: { started_at: Date.now() / 1000, preview: null },
     };
     this.jobs.set(id, job);
@@ -205,7 +182,6 @@ export class DshPM {
     let root;
     try {
       job.onProgress?.(job.progress);
-      job.readWorkspace = request.mode !== 'revision' || (await readdir(request.cwd)).some(name => name !== '.git');
       signal.throwIfAborted();
       const route = request.route;
       const agentOptions = {
@@ -218,15 +194,11 @@ export class DshPM {
         : await ctx.agents.create({ sessionId: parentId, meta: { cwd: request.cwd }, agentOptions, signal });
       const parent = root.agent;
       if (parent.session.header.cwd !== request.cwd) throw new Error('Autoloop PM workspace changed');
-      if (ctx.sandboxPolicy.resolve({ session: parent.session }).mode !== 'read-only') {
-        ctx.permissionPresets.set(parent.session, 'read-only');
-      }
-      const activate = async () => {
-        const text = request.prompt + (job.readWorkspace ? '' : NO_WORKSPACE_READS);
+      const activate = async (text = request.prompt) => {
         const activation = await ctx.subagents.startActivation({
           provider: 'spawn', childId: id, parent,
           label: acceptance ? 'Autoloop PM · Task acceptance' : 'Autoloop PM', cwd: request.cwd,
-          agentPreset: 'autoloop-pm', prompt: [{ type: 'text', text }], agentOptions,
+          prompt: [{ type: 'text', text }], agentOptions,
           maxDepth: 1, delivery: 'caller', signal, outputSchema,
         });
         const result = await job.settled.promise;
@@ -242,7 +214,7 @@ export class DshPM {
         output = await activate();
       } catch (error) {
         signal.throwIfAborted();
-        if (!(error instanceof PMInputBudgetError) || !job.hadUsage || job.cost >= request.budget_usd || acceptance) {
+        if (!(error instanceof PMInputBudgetError) || !job.hadUsage || job.cost >= request.budget_usd || acceptance || job.nonEvidenceToolRan) {
           throw error;
         }
         // The first child has settled. Keep its project reservation and accrued cost
@@ -254,10 +226,10 @@ export class DshPM {
         job.runId = undefined;
         job.error = undefined;
         job.settled = Promise.withResolvers();
-        job.readWorkspace = false;
+        job.readBytes = 0;
         job.progress = { ...job.progress, preview: null };
         job.onProgress?.(job.progress);
-        output = await activate();
+        output = await activate(request.prompt + COMPACT_RETRY);
       }
       return { output, cost_usd: job.cost, error: null, progress: job.progress };
     } catch (error) {
