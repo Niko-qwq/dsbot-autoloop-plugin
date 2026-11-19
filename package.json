@@ -1,6 +1,6 @@
 {
   "name": "dsbot-autoloop-plugin",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Local project planning, execution, acceptance, and reporting for DS Bot",
   "type": "module",
@@ -27,10 +27,14 @@
     "ui",
     "AGENTS.md",
     "SPEC.md",
-    "requirements.txt"
+    "requirements.txt",
+    "scripts/*.mjs",
+    "specs"
   ],
   "scripts": {
-    "build": "esbuild ui/side_panel.tsx --bundle --loader:.css=text --platform=browser --format=iife --jsx-factory=React.createElement --outfile=client.js"
+    "build": "esbuild ui/side_panel.tsx --bundle --loader:.css=text --platform=browser --format=iife --jsx-factory=React.createElement --outfile=client.js",
+    "verify:module": "node scripts/verify.mjs",
+    "verify": "node scripts/verify.mjs all"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",
@@ -40,10 +44,12 @@
     "@deepseek-ai/dsh-tool-web": "0.2.2-rc.3",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
     "@deepseek-ai/schemastery": "^3.19.0",
-    "zod": "^4.6.6"
+    "zod": "^4.6.6",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.3"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "@deepseek-ai/dsh": "0.2.2-rc.3"
   },
   "dsh": {
     "bundle": {

@@ -3,25 +3,6 @@ import * as fileSearch from '@deepseek-ai/dsh-tool-fs-search';
 import * as skillTool from '@deepseek-ai/dsh-tool-skill';
 import * as webTools from '@deepseek-ai/dsh-tool-web';
 
-const readVariants = new Map([
-  ['working_directory', args => args.cd === undefined],
-  ['group_goal', args => args.action === 'show'],
-  ['group_task', args => args.action === 'show'],
-  ['group_todo', args => args.action === 'list'],
-  ['mail_read', args => args.save_attachments === undefined || args.save_attachments === false],
-]);
-
-export const CHIEF_READ_TOOLS = new Set([
-  'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill',
-  'recall', 'read_own_chat', 'read_group_chat', 'list_capabilities', 'list_connectors', 'list_bots', 'list_bot_models',
-  'session_search', 'session_event_search', 'session_trace', 'session_event_trace', 'session_event_read',
-  'schedule_list', 'schedule_view', 'job_list', 'job_output', 'mail_search', ...readVariants.keys(),
-]);
-
-export function isReadVariant(name, args) {
-  return readVariants.get(name)?.(args ?? {}) ?? true;
-}
-
 const NATIVE_READERS = ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill'];
 
 export function installChiefReaders(ctx, roleOf) {

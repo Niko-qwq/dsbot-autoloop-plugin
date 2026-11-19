@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createScope, bindScopeParent } from '@deepseek-ai/dsh-scope';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { loopHarness } from '../../packages/dsh-project-engine/test/support/loop-harness.mjs';
+import { loopHarness } from './support/loop-harness.mjs';
 import { apply } from '../index.mjs';
 
-test('Chief retains inherited readers when a turn is claimed and authorizes each operation at execution', async t => {
+test('Chief and PM retain access to host tools when a turn is claimed', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'autoloop-chief-policy-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const state = join(directory, 'bots.json');
@@ -24,7 +24,7 @@ test('Chief retains inherited readers when a turn is claimed and authorizes each
   const presetKey = {};
   const preset = createScope(root, presetKey);
   const readers = ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill'];
-  const operations = ['write', 'mail_send', 'post_to_group', 'project_engine_command'];
+  const operations = ['write', 'mail_send', 'create_group', 'post_to_group', 'project_engine_command'];
   const executed = [];
 
   function tool(name, parameters = {}) {
@@ -60,37 +60,22 @@ test('Chief retains inherited readers when a turn is claimed and authorizes each
     root.emit('agent/inbox/claimed', { agent: chief });
     root.emit('agent/inbox/claimed', { agent: pm });
     assert.ok(readers.every(name => names(chief).includes(name)), 'inherited readers remain visible during the turn');
-    assert.ok(names(chief).includes('write'), 'Chief receives unfiltered registry with execution guards');
-    assert.ok(!names(pm).includes('write'), 'PM retains its turn filter');
-
-    const signal = AbortSignal.timeout(5_000);
-    const toolSet = await root.tools.resolve({ agent: chief, modelSelection, signal });
-    try {
-      async function call(name, args = {}) {
-        const { results: [{ result }] } = await root.tools.execute({ agent: chief, toolSet, signal, calls: [
-          { type: 'tool-call', id: name, name, arguments: JSON.stringify(args) },
-        ] });
-        return result;
+    for (const agent of [chief, pm]) {
+      assert.ok(operations.every(name => names(agent).includes(name)));
+      const signal = AbortSignal.timeout(5_000);
+      const toolSet = await root.tools.resolve({ agent, modelSelection, signal });
+      try {
+        for (const name of operations) {
+          const { results: [{ result }] } = await root.tools.execute({ agent, toolSet, signal, calls: [
+            { type: 'tool-call', id: name, name, arguments: '{}' },
+          ] });
+          assert.equal(result.isError, false, name);
+        }
+      } finally {
+        toolSet.dispose();
       }
-      for (const name of readers) assert.equal((await call(name)).isError, false, name);
-      assert.equal((await call('mail_read')).isError, false);
-      assert.equal((await call('mail_read', { save_attachments: false })).isError, false);
-      for (const [name, args] of [
-        ['mail_read', { save_attachments: true }], ...operations.map(name => [name, {}]),
-      ]) {
-        const result = await call(name, args);
-        assert.equal(result.isError, true, name);
-        assert.match(JSON.stringify(result), /Use this role’s read-only actions/);
-      }
-      const result = await call('autoloop_task_action', {
-        action: 'RETRY', project_id: 'policy', task_id: 'T1', event_id: 'fixture',
-      });
-      assert.equal(result.isError, true);
-      assert.match(JSON.stringify(result), /explicit retry instruction/);
-      assert.deepEqual(executed, [...readers, 'mail_read', 'mail_read']);
-    } finally {
-      toolSet.dispose();
     }
+    assert.deepEqual(executed, [...operations, ...operations]);
   } finally {
     await dispose();
   }

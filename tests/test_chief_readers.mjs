@@ -6,8 +6,8 @@ import { test } from 'node:test';
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local';
 import LocalSubprocess from '@deepseek-ai/dsh-subprocess-local';
 import WorkingDirectory from '@deepseek-ai/dsh-working-directory';
-import { loopHarness } from '../../packages/dsh-project-engine/test/support/loop-harness.mjs';
-import { CHIEF_READ_TOOLS, installChiefReaders, isReadVariant } from '../runtime/chief_readers.mjs';
+import { loopHarness } from './support/loop-harness.mjs';
+import { installChiefReaders } from '../runtime/chief_readers.mjs';
 
 test('Chief can use the native readers outside the session workspace', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'chief-readers-'));
@@ -69,17 +69,4 @@ test('Chief can use the native readers outside the session workspace', async t =
   }
   await readers.dispose();
   assert.deepEqual(root.tools.schemas(chief), []);
-});
-
-test('Chief retains read operations of native multi-action tools', () => {
-  assert.ok(CHIEF_READ_TOOLS.has('recall') && CHIEF_READ_TOOLS.has('list_capabilities') && CHIEF_READ_TOOLS.has('skill'));
-  assert.ok(['bash', 'write', 'edit', 'apply_patch', 'mail_send', 'remember'].every(name => !CHIEF_READ_TOOLS.has(name)));
-  assert.equal(isReadVariant('group_task', { action: 'show' }), true);
-  assert.equal(isReadVariant('group_task', { action: 'complete' }), false);
-  assert.equal(isReadVariant('group_todo', { action: 'list' }), true);
-  assert.equal(isReadVariant('group_todo', { action: 'remove' }), false);
-  assert.equal(isReadVariant('mail_read', { save_attachments: false }), true);
-  assert.equal(isReadVariant('mail_read', { save_attachments: true }), false);
-  assert.equal(isReadVariant('working_directory', {}), true);
-  assert.equal(isReadVariant('working_directory', { cd: '/' }), false);
 });

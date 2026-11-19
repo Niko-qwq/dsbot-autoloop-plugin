@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { loopHarness } from '../../packages/dsh-project-engine/test/support/loop-harness.mjs';
+import { loopHarness } from './support/loop-harness.mjs';
 import { chiefContextText, installChiefContext } from '../runtime/chief_context.mjs';
 
 const project = {
