@@ -7,6 +7,7 @@ import { syncProjectPMs } from './project_pm';
 import type { ProjectPM } from './project_pm';
 import { createManagedProductPanel } from './managed_product';
 import { createEmergencyControl } from './emergency';
+import { createProductLauncher } from './product_launcher';
 import styles from './panel.css';
 import emergencyStyles from './emergency.css';
 
@@ -147,8 +148,8 @@ const timeFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'nu
 const panelPath = (session: string) => 'panel?' + new URLSearchParams({ session_id: session });
 const blocked = new Set(['BLOCKED', 'FAILED']);
 
-function registerPanel(React: typeof import('react'), ctx: ClientContext, notices: ReturnType<typeof registerNotices>) {
-  const ManagedProducts = createManagedProductPanel(React);
+function registerPanel(React: typeof import('react'), ctx: ClientContext, notices: ReturnType<typeof registerNotices>,
+  ManagedProducts: ReturnType<typeof createManagedProductPanel>) {
   const ActionButtons = createActionButtons(React);
   const DraftRetry = createDraftRetry(React);
   const { NoticeDetails, useProjectNotices, WebsiteLink } = notices;
@@ -487,8 +488,10 @@ window.__ModuleLoader__.load({ id: ID, factory(require) {
     }, 'Autoloop styles');
     const notices = registerNotices(ctx.slots, React, KIND);
     ctx.effect(notices.connect, 'Autoloop notice feed');
-    registerPanel(React, ctx, notices);
+    const ManagedProducts = createManagedProductPanel(React);
+    registerPanel(React, ctx, notices, ManagedProducts);
     const EmergencyControl = createEmergencyControl(React);
+    const ProductLauncher = createProductLauncher(React, createPortal, ManagedProducts);
     ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autoloop-emergency', locale: KIND },
       ({ t }: { t: Translate }) => {
         const { mounted } = ctx.sidebarRight;
@@ -508,7 +511,11 @@ window.__ModuleLoader__.load({ id: ID, factory(require) {
           locate();
           return () => observer.disconnect();
         }, []);
-        return brand && createPortal(<EmergencyControl key={session} sessionId={session ?? undefined} chinese={t('managed') === '产品'} />, brand);
+        const chinese = t('managed') === '产品';
+        return brand && createPortal(<>
+          <EmergencyControl key={'emergency:' + session} sessionId={session} chinese={chinese} />
+          <ProductLauncher key={'products:' + session} session={session} chinese={chinese} />
+        </>, brand);
       }));
     registerChatCards(ctx.slots, React, KIND, open);
     ctx.effect(() => {

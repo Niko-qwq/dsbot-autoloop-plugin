@@ -54,6 +54,24 @@
 .autoloop-managed button:disabled { opacity: .55; cursor: default; }
 .autoloop-managed a { color: var(--loop-blue); overflow-wrap: anywhere; }
 .autoloop-managed-issue { margin-top: 8px; }
+.bt-side-top .autoloop-products-launcher {
+  appearance: none; flex: none; border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 5px; padding: 1px 5px; color: var(--bt-ink, var(--dsw-alias-label-primary, #242428));
+  background: transparent; font: 600 11px/16px system-ui, sans-serif; cursor: pointer;
+}
+.bt-side-top .autoloop-products-launcher:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.bt-side-top .autoloop-products-launcher:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.autoloop-products-dialog {
+  box-sizing: border-box; position: fixed; inset: 12px 12px 12px auto; margin: 0; padding: 0;
+  width: min(440px, calc(100vw - 24px)); height: auto; max-height: none; max-width: none;
+  border: 1px solid var(--loop-line); border-radius: 14px; box-shadow: 0 16px 58px #0005;
+}
+.autoloop-products-dialog:not([open]) { display: none; }
+.autoloop-products-dialog::backdrop { background: #0004; }
+.autoloop-products-dialog .autoloop-top { padding: 16px 20px; }
+.autoloop-products-dialog .autoloop-top h2 { font-size: 19px; }
+.autoloop-products-dialog .autoloop-managed { flex: 1; }
+.autoloop-products-dialog .autoloop-products-hint { margin: 16px 20px; }
 .autoloop-project { padding: 15px 15px 4px; border: 1px solid var(--loop-line); border-radius: 15px; background: var(--loop-card); box-shadow: var(--loop-shadow); }
 .autoloop-project[data-draft-project] { padding-bottom: 14px; }
 .autoloop-project.autoloop-clarification { padding-bottom: 14px; }
