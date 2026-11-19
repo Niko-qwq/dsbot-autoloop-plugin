@@ -18,4 +18,21 @@ jobs:
           python-version: '3.11'
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: python -m pip install -r requirements.txt pytest
+      - name: Verify the change's module suite
+        if: github.event_name == 'pull_request'
+        run: |
+          case "$GITHUB_HEAD_REF" in
+            feat/autoloop-m0[1-8])
+              module="${GITHUB_HEAD_REF##*-}"
+              npm run verify:module -- "${module^^}"
+              ;;
+          esac
       - run: npm run verify
+      - name: Build the candidate installation package
+        if: github.head_ref == 'feat/autoloop-m08'
+        run: npm run package:release -- "$RUNNER_TEMP/autoloop-dist"
+      - uses: actions/upload-artifact@v4
+        if: github.head_ref == 'feat/autoloop-m08'
+        with:
+          name: autoloop-installation-package
+          path: ${{ runner.temp }}/autoloop-dist/dsbot-autoloop-plugin-*
