@@ -14,6 +14,21 @@ export const productViewHeaders = { 'cache-control': 'no-store', 'referrer-polic
 export const productResponse = (value, status = 200) => Response.json(value, { status, headers: productViewHeaders });
 const sha256 = (bytes, encoding = 'hex') => createHash('sha256').update(bytes).digest(encoding);
 
+export function isSameBrowserOrigin(request) {
+  const supplied = request.headers.get('origin');
+  if (!supplied || request.headers.get('sec-fetch-site') === 'cross-site') return false;
+  const target = new URL(request.url);
+  if (target.origin !== 'http://dsh.internal') return supplied === target.origin;
+  // DSH checks Host and Origin on the HTTP request, then gives routes a synthetic URL.
+  const host = request.headers.get('host');
+  if (!host || /[\s/@?#\\]/u.test(host)) return false;
+  try {
+    const origin = new URL(supplied);
+    return ['http:', 'https:'].includes(origin.protocol) && supplied === origin.origin &&
+      new URL(`${origin.protocol}//${host}`).origin === origin.origin;
+  } catch { return false; }
+}
+
 export function managedQuery(request, fields) {
   const url = new URL(request.url);
   const query = url.searchParams;
@@ -21,7 +36,7 @@ export function managedQuery(request, fields) {
     return { error: productResponse({ error: 'Invalid managed product query parameters' }, 400) };
   }
   if (request.headers.get('sec-fetch-site') === 'cross-site' ||
-      (request.method === 'POST' && request.headers.get('origin') !== url.origin)) {
+      (request.method === 'POST' && !isSameBrowserOrigin(request))) {
     return { error: productResponse({ error: 'Managed product actions require the DS Bot web origin' }, 403) };
   }
   return { query };

@@ -87,6 +87,19 @@ test('browser requires same origin and trusted Chief confirmation for setup', as
   assert.equal(f.calls[0].actor_chief, true);
 });
 
+test('authenticated DSH bridge keeps same-origin POSTs usable through its synthetic URL', async t => {
+  const f = await fixture(t);
+  const send = (origin, extras = {}) => f.routes[PRODUCT].fetch(new Request(`http://dsh.internal${PRODUCT}?session_id=chief-session`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', host: '127.0.0.1:3080', origin, ...extras },
+    body: JSON.stringify({ operation: 'list' }),
+  }));
+  assert.equal((await send(ORIGIN)).status, 200);
+  assert.equal((await send('http://localhost:3080')).status, 403);
+  assert.equal((await send(ORIGIN, { 'sec-fetch-site': 'cross-site' })).status, 403);
+  assert.equal((await send(ORIGIN, { host: '127.0.0.1:3080@elsewhere' })).status, 403);
+  assert.equal(f.calls.length, 1);
+});
+
 test('artifact route binds the actor and receipt, and refuses changed bytes', async t => {
   const files = {
     'index.html': '<link rel="stylesheet" href="tool.css"><script defer src="tool.js"></script><main>试用</main>',

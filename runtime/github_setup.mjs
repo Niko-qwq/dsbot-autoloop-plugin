@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { createGitHubAppClient, createGitHubAppSetup } from './github_app.mjs';
 import { dispatchGitHubProduct } from './github_product.mjs';
+import { isSameBrowserOrigin } from './managed_product_artifacts.mjs';
 
 function secretCommand(executable, args, input = '') {
   return new Promise((resolve, reject) => {
@@ -24,7 +25,7 @@ function credentialStore(dataDir) {
   const label = 'dsbot-autoloop-' + createHash('sha256').update(dataDir).digest('hex').slice(0, 20);
   if (process.platform === 'darwin') {
     return {
-      put: value => secretCommand('security', ['-i'], `add-generic-password -U -a autoloop -s ${label} -w ${value}\nquit\n`),
+      put: value => secretCommand('security', ['-i'], `add-generic-password -U -a autoloop -s ${label} -w ${value}\n`),
       get: () => secretCommand('security', ['find-generic-password', '-a', 'autoloop', '-s', label, '-w']),
     };
   }
@@ -82,7 +83,9 @@ export function createGitHubGateway(dataDir, { vault = credentialStore(dataDir) 
         const { privateKey, ...info } = await setup.complete({
           code: url.searchParams.get('code'), state: url.searchParams.get('state'),
         });
-        await vault.put(Buffer.from(privateKey).toString('base64'));
+        const encoded = Buffer.from(privateKey).toString('base64');
+        await vault.put(encoded);
+        if (await vault.get() !== encoded) throw new Error('GitHub App key could not be read back from the OS credential store.');
         const scratch = metadata + '.tmp-' + randomBytes(8).toString('hex');
         await writeFile(scratch, JSON.stringify(info) + '\n', { mode: 0o600, flag: 'wx' });
         await rename(scratch, metadata);
@@ -124,8 +127,7 @@ export function createGitHubGateway(dataDir, { vault = credentialStore(dataDir) 
       }
       try {
         if (request.method === 'GET') return Response.json(await status());
-        const origin = request.headers.get('origin');
-        if (origin !== url.origin || request.headers.get('content-type')?.split(';')[0] !== 'application/json') {
+        if (!isSameBrowserOrigin(request) || request.headers.get('content-type')?.split(';')[0] !== 'application/json') {
           return Response.json({ error: 'Open the setup from this DS Bot page.' }, { status: 403 });
         }
         const body = await request.text();
