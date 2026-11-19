@@ -508,7 +508,7 @@ window.__ModuleLoader__.load({ id: ID, factory(require) {
           locate();
           return () => observer.disconnect();
         }, []);
-        return brand && session && createPortal(<EmergencyControl key={session} sessionId={session} chinese={t('managed') === '产品'} />, brand);
+        return brand && createPortal(<EmergencyControl key={session} sessionId={session ?? undefined} chinese={t('managed') === '产品'} />, brand);
       }));
     registerChatCards(ctx.slots, React, KIND, open);
     ctx.effect(() => {

@@ -36,7 +36,7 @@ async function requestEmergency(sessionId: string, signal: AbortSignal, body?: R
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export function createEmergencyControl(React: typeof ReactTypes) {
-  return function EmergencyControl({ sessionId, chinese }: { sessionId: string; chinese: boolean }) {
+  return function EmergencyControl({ sessionId, chinese }: { sessionId?: string; chinese: boolean }) {
     const label = (zh: string, en: string) => chinese ? zh : en;
     const title = label('应急修复', 'Emergency repair');
     const id = React.useId();
@@ -48,7 +48,6 @@ export function createEmergencyControl(React: typeof ReactTypes) {
     const action = React.useRef<AbortController | null>(null);
     const readGeneration = React.useRef(0);
     const viewGeneration = React.useRef(0);
-    const [visible, setVisible] = React.useState(false);
     const [open, setOpen] = React.useState(false);
     const [guardOpen, setGuardOpen] = React.useState(false);
     const [status, setStatus] = React.useState<EmergencyStatus>();
@@ -56,14 +55,17 @@ export function createEmergencyControl(React: typeof ReactTypes) {
     const [busy, setBusy] = React.useState(false);
     const [now, setNow] = React.useState(() => Date.now());
     const [readError, setReadError] = React.useState('');
+    const [access, setAccess] = React.useState<'chief' | 'sign-in'>();
     const [actionError, setActionError] = React.useState('');
     const topLayer = typeof HTMLElement.prototype.showPopover === 'function';
 
     React.useEffect(() => {
+      if (!open || !sessionId) return;
       const controller = new AbortController();
       let reading = false;
+      let denied = false;
       const refresh = async () => {
-        if (reading || action.current) return;
+        if (reading || denied || action.current) return;
         reading = true;
         const generation = readGeneration.current;
         try {
@@ -71,20 +73,24 @@ export function createEmergencyControl(React: typeof ReactTypes) {
           if (controller.signal.aborted || readGeneration.current !== generation) return;
           if (typeof next?.status !== 'string') throw new Error(chinese ? '应急状态无效' : 'Invalid emergency status');
           setStatus(next as EmergencyStatus);
-          setVisible(true);
+          setAccess(undefined);
           setReadError('');
         } catch (error) {
           if (controller.signal.aborted || readGeneration.current !== generation) return;
-          if (error instanceof EmergencyRequestError && [401, 403, 404].includes(error.status)) {
-            setVisible(false);
+          if (error instanceof EmergencyRequestError && (error.status === 401 || error.status === 403)) {
+            denied = true;
             setStatus(undefined);
+            setPrepared(undefined);
+            setGuardOpen(false);
+            setReadError('');
+            setAccess(error.status === 403 ? 'chief' : 'sign-in');
             return;
           }
           setReadError(errorMessage(error));
         } finally { reading = false; }
       };
       void refresh();
-      const timer = open ? window.setInterval(refresh, 1500) : undefined;
+      const timer = window.setInterval(refresh, 1500);
       return () => { window.clearInterval(timer); controller.abort(); };
     }, [sessionId, chinese, open]);
 
@@ -102,7 +108,7 @@ export function createEmergencyControl(React: typeof ReactTypes) {
     React.useLayoutEffect(() => {
       const button = launcher.current;
       const card = panel.current;
-      if (!open || !visible || !button || !card) return;
+      if (!open || !button || !card) return;
       const anchor = () => {
         const rect = button.getBoundingClientRect();
         const top = rect.bottom + 9;
@@ -131,14 +137,14 @@ export function createEmergencyControl(React: typeof ReactTypes) {
         document.removeEventListener('keydown', key);
         if (topLayer && card.matches(':popover-open')) card.hidePopover();
       };
-    }, [open, topLayer, visible]);
+    }, [open, topLayer]);
 
     React.useLayoutEffect(() => {
       if (prepared && !busy) cancelButton.current?.focus();
     }, [prepared, busy]);
 
     async function perform(body: RequestBody) {
-      if (action.current) return;
+      if (!sessionId || !status?.available || access || readError || action.current) return;
       const controller = new AbortController();
       const view = viewGeneration.current;
       action.current = controller;
@@ -183,10 +189,14 @@ export function createEmergencyControl(React: typeof ReactTypes) {
       return () => window.clearInterval(timer);
     }, [open, deadline]);
 
-    if (!visible) return null;
     const displayed = prepared ?? status;
     const secondsRemaining = deadline ? Math.max(0, Math.ceil((deadline - now) / 1000)) : undefined;
-    const enabled = !!status?.available && !active && !busy && !readError;
+    const enabled = !!sessionId && !!status?.available && !access && !active && !busy && !readError;
+    const guidance = !sessionId || access === 'chief'
+      ? label('在左侧打开 Chief 私聊，再点这里开启应急修复。', 'Open your private Chief conversation from the left sidebar, then select this icon again.')
+      : access === 'sign-in'
+        ? label('请重新登录 DSH 后重试。', 'Sign in to DSH again, then retry.')
+        : undefined;
     const states: Record<string, string> = {
       waiting: label('等待 Codex 回执', 'Waiting for Codex to acknowledge'),
       acknowledged: label('Codex 已接手修复', 'Codex is repairing the issue'),
@@ -209,7 +219,7 @@ export function createEmergencyControl(React: typeof ReactTypes) {
           <div><dt>{label('当前版本', 'Current version')}</dt><dd>{displayed.current ?? '—'}</dd></div>
           <div><dt>{label('回退版本', 'Rollback version')}</dt><dd>{displayed.rollback ?? '—'}</dd></div>
         </dl>}
-        {prepared ? <section className="autoloop-emergency-confirm" aria-labelledby={`${id}-confirm`}>
+        {guidance ? <p role="status">{guidance}</p> : prepared ? <section className="autoloop-emergency-confirm" aria-labelledby={`${id}-confirm`}>
           <h3 id={`${id}-confirm`}>{label('确认启动应急修复', 'Confirm emergency repair')}</h3>
           <p>{label(`将联系 Codex。${prepared.ackSeconds ?? 60} 秒内未收到回执，将回退到 ${prepared.rollback}。`,
             `Codex will be contacted. If it does not acknowledge within ${prepared.ackSeconds ?? 60} seconds, the host will roll back to ${prepared.rollback}.`)}</p>
@@ -222,7 +232,7 @@ export function createEmergencyControl(React: typeof ReactTypes) {
               onClick={() => void perform({ action: 'confirm', challenge: prepared.challenge })}>
               {busy ? label('正在提交…', 'Submitting…') : label('确认启动', 'Confirm')}</button>
           </footer>
-        </section> : <>
+        </section> : status ? <>
           <div className="autoloop-emergency-console" data-guard-open={guardOpen}>
             <div className="autoloop-emergency-mount">
               <button ref={redButton} type="button" className="autoloop-emergency-red-button" disabled={!enabled || !guardOpen}
@@ -240,7 +250,7 @@ export function createEmergencyControl(React: typeof ReactTypes) {
           {status?.repair && ['repair_ready', 'restored'].includes(status.status) && <p>{label('修复目录', 'Repair directory')} <code>{status.repair}</code></p>}
           {status?.detail && <p>{status.detail}</p>}
           {!status?.available && !status?.detail && !active && !readError && <p>{label('应急恢复尚未配置。', 'Emergency recovery has not been configured.')}</p>}
-        </>}
+        </> : !readError && <p role="status">{label('正在检查应急入口…', 'Checking emergency access…')}</p>}
         {(actionError || readError) && <p className="autoloop-emergency-error" role="alert">{actionError || readError}</p>}
       </div>}
     </>;
