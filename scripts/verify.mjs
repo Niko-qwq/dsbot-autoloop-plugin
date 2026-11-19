@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,7 +9,7 @@ if (moduleId !== 'all' && !/^M0[0-8]$/.test(moduleId ?? '')) {
 }
 const python = process.env.AUTOLOOP_TEST_PYTHON || 'python3';
 const testDir = 'tests/modules';
-const files = readdirSync(testDir).map(file => join(testDir, file));
+const files = existsSync(testDir) ? readdirSync(testDir).map(file => join(testDir, file)) : [];
 
 function check(command, args, env = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', env: { ...process.env, ...env } });
