@@ -34,11 +34,13 @@ function productPath(session: string, product?: Product, version?: string) {
 }
 
 export function createManagedProductPanel(React: typeof import('react')) {
-  function ChiefSetup({ session, bots, label, submit, busy }: { session: string; bots: Bot[]; label: Label; submit: Submit; busy: boolean }) {
+  function ChiefSetup({ session, bots, label, submit, busy, initiallyOpen }: { session: string; bots: Bot[]; label: Label; submit: Submit;
+    busy: boolean; initiallyOpen: boolean }) {
     const setupPath = `github-setup?${new URLSearchParams({ session_id: session })}`;
     const { value: github, error: loadError } = usePoll<GitHubSetup>(React, setupPath);
     const [registration, setRegistration] = React.useState<Registration>();
     const [error, setError] = React.useState<string>();
+    const [open, setOpen] = React.useState(initiallyOpen);
     const install = githubLink(github?.installUrl);
     const register = githubLink(registration?.registrationUrl);
 
@@ -61,7 +63,7 @@ export function createManagedProductPanel(React: typeof import('react')) {
         account_type: data.has('organization_account') ? 'organization' : 'personal' });
     }
 
-    return <details className="autoloop-project autoloop-managed-setup">
+    return <details className="autoloop-project autoloop-managed-setup" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>{label('GitHub 与产品接入', 'GitHub and product setup')}</summary>
       {github?.connected ? <p>{label('GitHub App 已注册', 'GitHub App registered')}{github.slug ? ` · ${github.slug}` : ''}
         {install && <> · <a href={install} target="_blank" rel="noreferrer">{label('安装到产品仓库', 'Install on product repositories')}</a></>}</p>
@@ -77,7 +79,7 @@ export function createManagedProductPanel(React: typeof import('react')) {
       <form onSubmit={attach}>
         <label>{label('产品名称', 'Product name')}<input name="title" required maxLength={160} /></label>
         <label>{label('仓库所有者', 'Repository owner')}<input name="owner" required /></label>
-        <label>{label('仓库名称', 'Repository name')}<input name="name" required /></label>
+        <label>{label('私有仓库名称', 'Private repository name')}<input name="name" required /></label>
         {(['pm', 'usage'] as const).map(role => <label key={role}>{role === 'pm' ? 'PM Bot' : label('使用 Bot', 'Usage Bot')}
           <select name={role} required defaultValue=""><option value="" disabled>{label('选择 Bot', 'Choose a Bot')}</option>
             {bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label>)}
@@ -157,7 +159,7 @@ export function createManagedProductPanel(React: typeof import('react')) {
     </>;
   }
 
-  return function ManagedProducts({ session, chinese }: { session: string; chinese: boolean }) {
+  return function ManagedProducts({ session, chinese, setupFirst = false }: { session: string; chinese: boolean; setupFirst?: boolean }) {
     const label = (zh: string, en: string) => chinese ? zh : en;
     const path = productPath(session);
     const { value, error } = usePoll<Listing>(React, path);
@@ -178,9 +180,13 @@ export function createManagedProductPanel(React: typeof import('react')) {
       finally { setBusy(false); }
     }
 
+    const setup = actor?.chief && <ChiefSetup session={session} bots={value?.setup_bots ?? []} label={label} submit={submit}
+      busy={busy} initiallyOpen={setupFirst} />;
+
     return <section className="autoloop-scroll autoloop-catalog autoloop-managed" aria-label={label('产品', 'Products')}>
       {(error || errorAction) && <p className="autoloop-error" role="alert">{errorAction ?? error}</p>}
       {!value && !error && <p className="autoloop-muted">{label('正在读取产品…', 'Loading products…')}</p>}
+      {setupFirst && setup}
       {product && value && <>
         <label className="autoloop-managed-select">{label('产品', 'Product')}
           <select value={product.repository_id} onChange={event => setSelected(Number(event.currentTarget.value))}>
@@ -198,7 +204,7 @@ export function createManagedProductPanel(React: typeof import('react')) {
         <ProductHistory product={product} canReview={canReview === true} label={label} submit={submit} busy={busy} />
       </>}
       {value && !product && <p className="autoloop-muted">{label('此 Bot 暂未关联产品。', 'This Bot has no bound products.')}</p>}
-      {actor?.chief && <ChiefSetup session={session} bots={value?.setup_bots ?? []} label={label} submit={submit} busy={busy} />}
+      {!setupFirst && setup}
     </section>;
   };
 }

@@ -6,7 +6,10 @@ import { previewHref, registerNotices } from './notices';
 import { syncProjectPMs } from './project_pm';
 import type { ProjectPM } from './project_pm';
 import { createManagedProductPanel } from './managed_product';
+import { createEmergencyControl } from './emergency';
+import { createProductLauncher } from './product_launcher';
 import styles from './panel.css';
+import emergencyStyles from './emergency.css';
 
 const ID = 'dsbot-autoloop-plugin';
 const KIND = 'autoloop';
@@ -145,8 +148,8 @@ const timeFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'nu
 const panelPath = (session: string) => 'panel?' + new URLSearchParams({ session_id: session });
 const blocked = new Set(['BLOCKED', 'FAILED']);
 
-function registerPanel(React: typeof import('react'), ctx: ClientContext, notices: ReturnType<typeof registerNotices>) {
-  const ManagedProducts = createManagedProductPanel(React);
+function registerPanel(React: typeof import('react'), ctx: ClientContext, notices: ReturnType<typeof registerNotices>,
+  ManagedProducts: ReturnType<typeof createManagedProductPanel>) {
   const ActionButtons = createActionButtons(React);
   const DraftRetry = createDraftRetry(React);
   const { NoticeDetails, useProjectNotices, WebsiteLink } = notices;
@@ -457,14 +460,20 @@ function registerPanel(React: typeof import('react'), ctx: ClientContext, notice
     }));
 }
 
+type ClientModuleRequire = {
+  (name: 'react'): typeof import('react');
+  (name: 'react-dom'): Pick<typeof import('react-dom'), 'createPortal'>;
+};
+
 declare global {
   interface Window {
-    __ModuleLoader__: { load: (value: { id: string; factory: (require: (name: 'react') => typeof import('react')) => object }) => void };
+    __ModuleLoader__: { load: (value: { id: string; factory: (require: ClientModuleRequire) => object }) => void };
   }
 }
 
 window.__ModuleLoader__.load({ id: ID, factory(require) {
   const React = require('react');
+  const { createPortal } = require('react-dom');
   return { inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'], apply(ctx: ClientContext) {
     const open = () => {
       localStorage.removeItem(FOLDED);
@@ -473,13 +482,41 @@ window.__ModuleLoader__.load({ id: ID, factory(require) {
     ctx.effect(() => ctx.locale.register(KIND, dictionaries), 'Autoloop copy');
     ctx.effect(() => {
       const style = document.createElement('style');
-      style.textContent = styles;
+      style.textContent = styles + emergencyStyles;
       document.head.append(style);
       return () => style.remove();
     }, 'Autoloop styles');
     const notices = registerNotices(ctx.slots, React, KIND);
     ctx.effect(notices.connect, 'Autoloop notice feed');
-    registerPanel(React, ctx, notices);
+    const ManagedProducts = createManagedProductPanel(React);
+    registerPanel(React, ctx, notices, ManagedProducts);
+    const EmergencyControl = createEmergencyControl(React);
+    const ProductLauncher = createProductLauncher(React, createPortal, ManagedProducts);
+    ctx.slots.inject('shell.overlay', () => ctx.slots.register({ name: 'shell.overlay', id: 'autoloop-emergency', locale: KIND },
+      ({ t }: { t: Translate }) => {
+        const { mounted } = ctx.sidebarRight;
+        const session = React.useSyncExternalStore(mounted.subscribe, mounted.getSnapshot);
+        const [brand, setBrand] = React.useState<HTMLElement | null>(null);
+        React.useEffect(() => {
+          let current: HTMLElement | null = null;
+          const locate = () => {
+            if (current?.isConnected) return;
+            const next = document.querySelector<HTMLElement>('.bt-side-top > .bt-brand');
+            if (next === current) return;
+            current = next;
+            setBrand(current);
+          };
+          const observer = new MutationObserver(locate);
+          observer.observe(document.body, { childList: true, subtree: true });
+          locate();
+          return () => observer.disconnect();
+        }, []);
+        const chinese = t('managed') === '产品';
+        return brand && createPortal(<>
+          <EmergencyControl key={'emergency:' + session} sessionId={session} chinese={chinese} />
+          <ProductLauncher key={'products:' + session} session={session} chinese={chinese} />
+        </>, brand);
+      }));
     registerChatCards(ctx.slots, React, KIND, open);
     ctx.effect(() => {
       const { mounted } = ctx.sidebarRight;
