@@ -11,16 +11,16 @@ from uuid import uuid4
 
 from pydantic import Field, JsonValue
 
-from api.bridge import ActionConflict, AutoloopBridge, PMPlanChange, ProjectScopeDenied, Request
+from api.bridge import COMMUNICATION, ActionConflict, AutoloopBridge, PMPlanChange, ProjectScopeDenied, Request
 from config.constants import BRIDGE_POLL_SEC, MAX_AGENT_POLL_TICKS, MAX_RETRY
 from core.bus import EventBus, make_outbox
 from core.governance import GovernanceGate
 from core.product_state import ProductError, ProductForbidden
 from core.schema import (
     BudgetPolicy, InboxEventType, ModelRoute, NonEmptyText, NonnegativeCost, OutboxEventType, PMTaskVerdict,
-    PlanPrepared, PlanningProgress, PrepareProject, ProjectBinding, ProjectStatus, StrictModel, TaskDAG,
+    PlanPrepared, PlanningProgress, PrepareProject, ProjectBinding, ProjectStatus, StrictModel, TaskDAG, TaskStatus,
 )
-from core.state_manager import DAGManager, StateFormatError, read_model, write_atomic
+from core.state_manager import DAGManager, StateFormatError, read_model, workspace_has_unconfirmed_writer, write_atomic
 from runtime.codex_worker import CodexWorker
 from runtime.daemon import AgentReply, AutoloopDaemon, ModelCallError
 from runtime.managed_products import MailboxGitHub, ManagedProducts, canonical
@@ -378,6 +378,9 @@ class Plugin:
                 data["history"].extend(await self.version_plans.notices())
                 status = 200
             elif self.managed and (runtime := self.version_plans.by_project(request.project_id)):
+                if (runtime in self.version_plans.retired and request.method == "POST" and
+                        request.path != COMMUNICATION):
+                    raise ProductError("This workflow revision has been replaced")
                 if request.method == "POST" and request.path in ("/api/autoloop/pm-plan", "pm-plan-proposal"):
                     raise ProductError("Revise a managed workflow explicitly in its product panel")
                 if request.method == "POST" and request.path == "/api/autoloop/action":
@@ -453,29 +456,35 @@ class VersionPlans:
     def __init__(self, make_runtime):
         self.make_runtime = make_runtime
         self.runtimes = {}
-        self.jobs = []
+        self.jobs = {}
+        self.retired = set()
 
     async def restore(self, services):
         self.services = services
         for product in self.service.store.read()["products"].values():
             for version in product["versions"].values():
+                for prior in version.get("history", []):
+                    await self.runtime(product, {**version, **prior, "revision": prior.get("revision") or 1},
+                                       historical=True)
                 await self.runtime(product, version)
 
-    async def runtime(self, product, version):
+    async def runtime(self, product, version, *, historical=False):
         key = self.key(product, version)
         runtime = self.runtimes.get(key)
         if runtime is None:
             runtime = self.make_runtime(self.directory(*key))
             await runtime.initialize()
             self.runtimes[key] = runtime
-            if not version.get("released") and not version.get("interrupted"):
-                self.jobs.append(self.services.create_task(runtime.daemon.run_forever()))
-                self.jobs.append(self.services.create_task(self.drafts(runtime)))
+            if historical:
+                self.retired.add(runtime)
+            elif not version.get("released") and not version.get("interrupted"):
+                self.jobs[runtime] = (self.services.create_task(runtime.daemon.run_forever()),
+                                      self.services.create_task(self.drafts(runtime)))
         return runtime
 
     @staticmethod
     def key(product, version):
-        return product["repository_id"], version["version"], version.get("revision", 1)
+        return product["repository_id"], version["version"], version.get("revision") or 1
 
     def directory(self, repository_id, version, revision):
         directory = self.service.store.workspace(repository_id, version)
@@ -489,8 +498,9 @@ class VersionPlans:
             await asyncio.sleep(BRIDGE_POLL_SEC)
 
     def stop(self):
-        for job in self.jobs:
-            job.cancel()
+        for jobs in self.jobs.values():
+            for job in jobs:
+                job.cancel()
 
     def by_project(self, project_id):
         if project_id:
@@ -533,9 +543,10 @@ class VersionPlans:
         if not isinstance(goal, str) or not goal.strip() or len(goal) > 5600:
             raise ProductError("Provide a bounded workflow development brief")
         instruction = ("交付可反复运行的小红书小工具生产工作流。版本交付物是根目录 workflow.json 和声明的 resources 文本。"
-                       '最小清单 {"schema":1,"title":"小工具生产","steps":["research","generate","validate","package"],'
-                       '"tool":{"kind":"checklist","labels":["检查输入","核对结果"]},'
-                       '"allowed_kinds":["checklist","calculator","template"],"resources":[]}。'
+                       "清单 schema 为 1，steps 依次为 research、generate、validate、package。"
+                       "tool.kind 按已确认的产品范围使用 checklist、calculator 或 template。"
+                       "tool.labels 使用产品简报和经 PM 确认的来源中的实际标签，保留文案和顺序。"
+                       "修订或维护已有工作流时，沿用已确认的基线，包括固定标签、支持类型和资源约定，仅更改本轮明确要求的范围。"
                        "请先调研，核对声明与测试预期，再生成清单及回归用例。工作流执行器由插件提供，使用 Bot 在发布后提交小工具 Idea。"
                        "研发 DAG 只安排调研、实现和回归验证，终点是 PM 验收工作流文件。候选冻结、真实试用、发布和回退由产品命令在 DAG 完成后处理，不能成为 DAG 内的任务或完成条件。")
         request = PrepareProject.model_validate({
@@ -595,6 +606,25 @@ class VersionPlans:
         return {"status": dag.project_status.value, "tasks": [
             {"task_id": task.task_id, "title": task.title, "status": task.status.value} for task in dag.tasks
         ]}
+
+    async def retire(self, product, version):
+        runtime = self.runtimes.get(self.key(product, version))
+        if not runtime:
+            return False
+        async with runtime.manager.lock:
+            dag = runtime.manager.load()
+            cleanup_failed = any(task.worker_runs and task.worker_runs[-1].escalation and
+                                 task.worker_runs[-1].escalation.reason_code == "WORKER_CLEANUP_FAILED"
+                                 for task in dag.tasks)
+            if (dag.project_id != version["project_id"] or dag.project_status not in
+                    (ProjectStatus.IDLE, ProjectStatus.COMPLETED, ProjectStatus.PAUSED, ProjectStatus.ALERT) or
+                    runtime.router.active_workers or runtime.daemon._acceptance_job is not None or cleanup_failed or
+                    workspace_has_unconfirmed_writer(dag) or any(task.status == TaskStatus.RUNNING for task in dag.tasks)):
+                return False
+            self.retired.add(runtime)
+            for job in self.jobs.pop(runtime, ()):
+                job.cancel()
+            return True
 
 
 async def main(args: argparse.Namespace) -> None:

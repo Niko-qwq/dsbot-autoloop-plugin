@@ -250,13 +250,18 @@ class ManagedProducts:
             if trial_progress(product) is not None or product.get("delivery", {}).get("pending"):
                 raise ProductError("Pause trial and finish any pending delivery before revising")
             if version["project_id"] and hasattr(self.planning, "status"):
-                current = self.planning.status(product, version)
-                if not current or current["status"] not in ("COMPLETED", "IDLE"):
-                    raise ProductError("Finish the current version work or revise an unstarted plan")
+                if hasattr(self.planning, "retire"):
+                    settled = await self.planning.retire(product, version)
+                else:
+                    current = self.planning.status(product, version)
+                    settled = current and current["status"] in ("COMPLETED", "IDLE")
+                if not settled:
+                    raise ProductError("Finish current work, or pause and settle all writes before revising")
             if version["project_id"]:
                 prior = {key: version.get(key) for key in ("project_id", "build_id", "revision")}
+                prior["revision"] = prior["revision"] or 1
                 version.setdefault("history", []).append(prior)
-                version.update(revision=version.get("revision", 1) + 1, project_id=None)
+                version.update(revision=prior["revision"] + 1, project_id=None)
             self.store.put(state, product)
             receipt = await self.planning.prepare(product, version, args)
             version["project_id"] = receipt["project_id"]
