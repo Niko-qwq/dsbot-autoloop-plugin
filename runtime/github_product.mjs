@@ -260,7 +260,8 @@ async function submitWorkflow(client, repository, { version, expected_base: base
 
   let pr;
   try {
-    pr = await get(client, repository, PULL_WRITE, '/pulls', {
+    // GitHub also checks access to both refs when opening a PR in a private repository.
+    pr = await get(client, repository, { ...CONTENT_READ, ...PULL_WRITE }, '/pulls', {
       method: 'POST', body: { title: 'Autoloop workflow ' + version, body: line, head: branch, base },
     });
   } catch (error) {
