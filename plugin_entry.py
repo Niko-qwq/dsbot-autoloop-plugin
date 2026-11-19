@@ -15,6 +15,7 @@ from api.bridge import ActionConflict, AutoloopBridge, PMPlanChange, ProjectScop
 from config.constants import BRIDGE_POLL_SEC, MAX_AGENT_POLL_TICKS, MAX_RETRY
 from core.bus import EventBus, make_outbox
 from core.governance import GovernanceGate
+from core.product_state import ProductError, ProductForbidden
 from core.schema import (
     BudgetPolicy, InboxEventType, ModelRoute, NonEmptyText, NonnegativeCost, OutboxEventType, PMTaskVerdict,
     PlanPrepared, PlanningProgress, PrepareProject, ProjectBinding, ProjectStatus, StrictModel, TaskDAG,
@@ -22,6 +23,7 @@ from core.schema import (
 from core.state_manager import DAGManager, StateFormatError, read_model, write_atomic
 from runtime.codex_worker import CodexWorker
 from runtime.daemon import AgentReply, AutoloopDaemon, ModelCallError
+from runtime.managed_products import MailboxGitHub, ManagedProducts, canonical
 from runtime.pm_agent import PMAgent, PMDelta, PMDraft
 from runtime.router import Router
 from runtime.watchdog import RollbackError, Watchdog
@@ -154,6 +156,7 @@ class Plugin:
         codex_profile: str | None = None, codex_reasoning_effort: str = "xhigh",
         codex_network: bool | None = None,
         codex_computer_use: bool = False,
+        managed_root: bool = True,
     ):
         self.mailbox = mailbox
         self.draft_path = data_dir / "project-draft.json"
@@ -186,6 +189,16 @@ class Plugin:
             task_acceptance=self.pm.accept_task,
         )
         self.bridge = AutoloopBridge(self.daemon, self.prepare, self.read_draft, self.retry_draft)
+        self.managed = None
+        if managed_root:
+            def version_runtime(directory):
+                return Plugin(directory, mailbox, codex, codex_profile=codex_profile,
+                              codex_reasoning_effort=codex_reasoning_effort, codex_network=codex_network,
+                              codex_computer_use=codex_computer_use, managed_root=False)
+
+            self.version_plans = VersionPlans(version_runtime)
+            self.managed = ManagedProducts(data_dir, MailboxGitHub(mailbox), self.version_plans)
+            self.version_plans.service = self.managed
 
     async def initialize(self) -> None:
         workspace = self.manager.workspace
@@ -354,7 +367,32 @@ class Plugin:
 
     async def _serve_request(self, path: Path, request: Request) -> None:
         try:
-            status, data = await self.bridge.handle(request)
+            if self.managed and request.path == "/api/autoloop/product":
+                data = await self.managed.handle(request.actor_id, json.loads(request.body or '{}'),
+                                                 chief=request.actor_chief, human=request.actor_human,
+                                                 source=request.source_id)
+                status = 200
+            elif self.managed and request.path == "/api/autoloop/notices":
+                async with self.manager.lock:
+                    data = self.bridge._notices()
+                data["history"].extend(await self.version_plans.notices())
+                status = 200
+            elif self.managed and (runtime := self.version_plans.by_project(request.project_id)):
+                if request.method == "POST" and request.path in ("/api/autoloop/pm-plan", "pm-plan-proposal"):
+                    raise ProductError("Revise a managed workflow explicitly in its product panel")
+                if request.method == "POST" and request.path == "/api/autoloop/action":
+                    body = json.loads(request.body or '{}')
+                    if body.get("action") in ("USER_FEEDBACK", "DELETE_FEEDBACK", "RETRY_FEEDBACK"):
+                        raise ProductError("Use the product GitHub Issue inbox for maintenance")
+                status, data = await runtime.bridge.handle(request)
+            else:
+                status, data = await self.bridge.handle(request)
+        except ProductForbidden as error:
+            status, data = 403, {"error": str(error)}
+        except (ValueError, ActionConflict) as error:
+            status, data = 409, {"error": str(error)}
+        except KeyError:
+            status, data = 400, {"error": "Missing managed product action field"}
         except (ModelCallError, OSError, RollbackError, StateFormatError, TimeoutError) as error:
             status, data = 500, {"error": f"{type(error).__name__}: {error}"}
         if path.exists():
@@ -371,6 +409,10 @@ class Plugin:
         async with asyncio.TaskGroup() as services:
             daemon = services.create_task(self.daemon.run_forever())
             draft_job = None
+            requests = {}
+            if self.managed:
+                await self.version_plans.restore(services)
+                poller = services.create_task(self._poll_products())
             while os.getppid() == parent:
                 if draft_job is None or draft_job.done():
                     draft = self._load_draft()
@@ -378,17 +420,180 @@ class Plugin:
                         draft_job = services.create_task(self._plan_draft(draft))
                 for path in sorted(self.mailbox.glob("ui-*.request.json")):
                     reply = path.with_name(path.name.replace(".request.json", ".response.json"))
-                    if reply.exists():
+                    if reply.exists() or path in requests:
                         continue
                     try:
                         request = read_model(path, Request)
                     except FileNotFoundError:
                         continue  # The owner cancelled this mailbox request.
-                    await self._serve_request(path, request)
+                    if self.managed and request.path == "/api/autoloop/product":
+                        job = requests[path] = services.create_task(self._serve_request(path, request))
+                        job.add_done_callback(lambda _, request_path=path: requests.pop(request_path, None))
+                    else:
+                        await self._serve_request(path, request)
                 await asyncio.sleep(BRIDGE_POLL_SEC)
+            if self.managed:
+                poller.cancel()
+                self.version_plans.stop()
             daemon.cancel()
             if draft_job is not None:
                 draft_job.cancel()
+
+    async def _poll_products(self):
+        while True:
+            try:
+                await self.version_plans.publish_facts()
+                await self.managed.poll()
+            except (ValueError, OSError) as error:
+                logging.getLogger(__name__).warning("Autoloop product polling: %s", error)
+            await asyncio.sleep(60)
+
+
+class VersionPlans:
+    def __init__(self, make_runtime):
+        self.make_runtime = make_runtime
+        self.runtimes = {}
+        self.jobs = []
+
+    async def restore(self, services):
+        self.services = services
+        for product in self.service.store.read()["products"].values():
+            for version in product["versions"].values():
+                await self.runtime(product, version)
+
+    async def runtime(self, product, version):
+        key = self.key(product, version)
+        runtime = self.runtimes.get(key)
+        if runtime is None:
+            runtime = self.make_runtime(self.directory(*key))
+            await runtime.initialize()
+            self.runtimes[key] = runtime
+            if not version.get("released") and not version.get("interrupted"):
+                self.jobs.append(self.services.create_task(runtime.daemon.run_forever()))
+                self.jobs.append(self.services.create_task(self.drafts(runtime)))
+        return runtime
+
+    @staticmethod
+    def key(product, version):
+        return product["repository_id"], version["version"], version.get("revision", 1)
+
+    def directory(self, repository_id, version, revision):
+        directory = self.service.store.workspace(repository_id, version)
+        return directory if revision == 1 else directory / "revisions" / str(revision)
+
+    async def drafts(self, runtime):
+        while True:
+            draft = runtime._load_draft()
+            if draft and draft.status == "QUEUED":
+                await runtime._plan_draft(draft)
+            await asyncio.sleep(BRIDGE_POLL_SEC)
+
+    def stop(self):
+        for job in self.jobs:
+            job.cancel()
+
+    def by_project(self, project_id):
+        if project_id:
+            for runtime in self.runtimes.values():
+                draft = runtime._load_draft()
+                if runtime.manager.load().project_id == project_id or (draft and draft.project_id == project_id):
+                    return runtime
+        return None
+
+    async def publish_facts(self):
+        from runtime.product_release import delivery_projection
+        for product in self.service.store.read()["products"].values():
+            for operation in delivery_projection(product)["completed"].values():
+                version = product["versions"][operation["build"]["version"]]
+                runtime = self.by_project(version["project_id"])
+                if runtime is None:
+                    continue
+                rollback = operation["request"]["kind"] == "rollback"
+                event_type = OutboxEventType.PRODUCT_ROLLED_BACK if rollback else OutboxEventType.PRODUCT_RELEASED
+                async with runtime.manager.lock:
+                    runtime.bus._append_outbox(make_outbox(event_type, project_id=version["project_id"],
+                        event_id=operation["fact_id"],
+                        summary=f"默认工作流已核验为 {version['version']}。"))
+
+    async def notices(self):
+        await self.publish_facts()
+        result = []
+        for runtime in self.runtimes.values():
+            async with runtime.manager.lock:
+                batch = runtime.bridge._notices()
+            if batch.get("project") and batch.get("notices"):
+                batch["project"]["static_preview"] = False
+                result.append(batch)
+        return result
+
+    async def prepare(self, product, version, args):
+        runtime = await self.runtime(product, version)
+        session = product["chief_session"]
+        goal = args.get("goal")
+        if not isinstance(goal, str) or not goal.strip() or len(goal) > 5600:
+            raise ProductError("Provide a bounded workflow development brief")
+        instruction = ("交付可反复运行的小红书小工具生产工作流。版本交付物是根目录 workflow.json 和声明的 resources 文本。"
+                       '最小清单 {"schema":1,"title":"小工具生产","steps":["research","generate","validate","package"],'
+                       '"tool":{"kind":"checklist","labels":["检查输入","核对结果"]},'
+                       '"allowed_kinds":["checklist","calculator","template"],"resources":[]}。'
+                       "请先调研，核对声明与测试预期，再生成清单及回归用例。工作流执行器由插件提供，使用 Bot 在发布后提交小工具 Idea。")
+        request = PrepareProject.model_validate({
+            "session_id": session, "route": args["route"], "goal": f"{goal}\n\n{instruction}",
+            "max_budget_usd": product["grant"]["budget"],
+            "brief": {"source_session_id": session, "source_message_id": f"managed-{version['version']}",
+                      "user_instruction": goal,
+                      "acceptance": ["调研适用范围和交付形式", "工作流清单可运行且核对正常和边界样例"],
+                      "authorization": "在产品工作目录开发已授权的离线小工具生产工作流。"},
+        })
+        receipt = await runtime.prepare(request, (session,))
+        base_build = version.get("build_id")
+        if not base_build and version["base"]:
+            base_build = product["versions"][version["base"]]["build_id"]
+        if base_build:
+            workflow = self.service.load_package(product, product["builds"][base_build])
+            directory = runtime.manager.project_directory(receipt["project_id"])
+            for name, content in workflow.source_files().items():
+                path = directory / name
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if not path.exists():
+                    write_atomic(path, content.decode("utf-8"))
+        return receipt
+
+    async def start(self, product, version):
+        from api.bridge import ACTION
+        runtime = await self.runtime(product, version)
+        dag = runtime.manager.load()
+        if dag.project_id != version["project_id"]:
+            raise ProductError("The version plan is still being prepared")
+        result = await runtime.bridge.handle(Request(method="POST", path=ACTION, project_id=dag.project_id,
+            session_id=product["chief_session"], event_id=dag.start_approval_base,
+            body='{"action":"START_PROJECT","task_id":null}'))
+        if result[0] != 200:
+            raise ProductError(result[1].get("error", "Unable to start version"))
+        return result[1]
+
+    def accepted(self, product, version):
+        directory = self.directory(*self.key(product, version))
+        manager = DAGManager(directory / "workspace")
+        dag = manager.load()
+        if dag.project_id != version["project_id"] or dag.project_status != ProjectStatus.COMPLETED:
+            raise ProductError("Complete PM acceptance of the version DAG before freezing")
+        snapshot = dag.model_dump(mode="json", exclude={"binding"})
+        return manager.project_directory(dag.project_id), canonical(snapshot)
+
+    def status(self, product, version):
+        runtime = self.runtimes.get(self.key(product, version))
+        if runtime is None:
+            return None
+        draft = runtime.read_draft(None, version["project_id"])
+        if draft:
+            return {"status": "planning", "draft_status": draft["status"], "error": draft["error"]}
+        dag = runtime.manager.load()
+        if dag.project_id != version["project_id"]:
+            return None
+        return {"status": dag.project_status.value, "tasks": [
+            {"task_id": task.task_id, "title": task.title, "status": task.status.value} for task in dag.tasks
+        ]}
 
 
 async def main(args: argparse.Namespace) -> None:

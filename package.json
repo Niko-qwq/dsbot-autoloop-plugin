@@ -1,6 +1,6 @@
 {
   "name": "dsbot-autoloop-plugin",
-  "version": "0.3.1",
+  "version": "0.4.0-rc.1",
   "private": true,
   "description": "Local project planning, execution, acceptance, and reporting for DS Bot",
   "type": "module",
@@ -34,7 +34,8 @@
   "scripts": {
     "build": "esbuild ui/side_panel.tsx --bundle --loader:.css=text --platform=browser --format=iife --jsx-factory=React.createElement --outfile=client.js",
     "verify:module": "node scripts/verify.mjs",
-    "verify": "node scripts/verify.mjs all"
+    "verify": "node scripts/verify.mjs all",
+    "package:release": "node scripts/package.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",

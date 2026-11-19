@@ -161,6 +161,10 @@ class Request(StrictModel):
     file_path: str | None = None
     task_id: str | None = None
     include_logs: bool = False
+    actor_id: str | None = None
+    actor_chief: bool = False
+    actor_human: bool = False
+    source_id: str | None = None
 
     @property
     def chief_session_ids(self) -> tuple[str, ...]:
@@ -524,7 +528,9 @@ class AutoloopBridge:
         for event in events:
             if event.event_id in pending_actions:
                 continue
-            if event.type == OutboxEventType.PROJECT_ALERT:
+            if event.type in (OutboxEventType.PRODUCT_RELEASED, OutboxEventType.PRODUCT_ROLLED_BACK):
+                current = True
+            elif event.type == OutboxEventType.PROJECT_ALERT:
                 current = event is feedback_failure
             elif event.type == OutboxEventType.ALERT_ESCALATED:
                 task = tasks.get(event.task_id)

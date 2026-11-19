@@ -25,6 +25,11 @@ function text(value, limit) {
 export function chiefDeliveryText(facts) {
   const project = text(facts.project_title, 100);
   const zh = /\p{Script=Han}/u.test([project, facts.goal, facts.summary].join(' '));
+  if (facts.kind === 'PRODUCT_RELEASED' || facts.kind === 'PRODUCT_ROLLED_BACK') {
+    const subject = zh ? `「${project}」${facts.kind === 'PRODUCT_RELEASED' ? '已发布' : '已回退'}。`
+      : `“${project}” ${facts.kind === 'PRODUCT_RELEASED' ? 'was released' : 'was rolled back'}.`;
+    return [subject, text(facts.summary, 460)].filter(Boolean).join('\n');
+  }
   if (facts.kind === 'PROJECT_COMPLETED') {
     const { done, total, artifacts = [] } = facts.report ?? {};
     const subject = zh ? `「${project}」已完成本轮交付。` : `“${project}” is ready to review.`;

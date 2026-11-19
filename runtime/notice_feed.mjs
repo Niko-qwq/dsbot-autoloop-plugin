@@ -79,7 +79,7 @@ export function makeNoticeFeed(path, workspace, read, warn, { alwaysRead = false
   const heartbeat = setInterval(() => {
     const comment = encoder.encode(': keepalive\n\n');
     for (const controller of clients.keys()) send(controller, comment);
-    if (clients.size) void refresh();
+    if (alwaysRead || clients.size) void refresh();
   }, KEEPALIVE_MS);
   heartbeat.unref();
 

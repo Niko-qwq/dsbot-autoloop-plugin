@@ -49,7 +49,7 @@ function update() {
 
 form.addEventListener('input', update);
 form.addEventListener('submit', event => event.preventDefault());
-form.addEventListener('reset', () => queueMicrotask(update));
+form.addEventListener('reset', () => setTimeout(update, 0));
 update();
 """).encode()
 

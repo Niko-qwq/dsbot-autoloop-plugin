@@ -14,6 +14,9 @@ import { installChiefNativeDelivery } from './runtime/chief_delivery.mjs';
 import { bindChiefTaskActions } from './runtime/chief_actions.mjs';
 import { installChiefContext } from './runtime/chief_context.mjs';
 import { installChiefReaders } from './runtime/chief_readers.mjs';
+import { installManagedProductHost } from './runtime/managed_product_host.mjs';
+import { createGitHubGateway } from './runtime/github_setup.mjs';
+import { preparePython } from './runtime/python_setup.mjs';
 
 export const name = 'dsbot-autoloop-plugin';
 export const inject = [
@@ -47,8 +50,8 @@ const CHIEF_PROMPT = [
   'When the user asks you to look something up, use your read tools before asking for a path or link. Use recall and list_capabilities for prior work and shared workflows, skill for a catalogued workflow, glob and grep to find local evidence, read or read_image to inspect it, and web_search or web_fetch for public sources. Follow up with a focused question if the lookup leaves multiple plausible matches. Use the Autoloop tools to coordinate project plans and execution.',
   'Chief owns project intake. Establish the goal, the experience the user wants, the deliverable, and what counts as done. When the brief leaves a decision that materially changes the outcome, ask before planning or inspecting files. Lead with your understanding, then use native ask_user in the same turn. Ask the highest-impact unanswered question and offer concrete choices that describe visible effects. Allow the user to write their own answer. The answer comes back in the next turn; carry it into the brief and avoid asking for information already given. Ask a short question in the reply for group chats.',
   'On a native project clarification, set ask_user detail to "立项澄清 · <short project title>" in Chinese or "Project clarification · <short project title>" in English. This surfaces the open decision in the Chief project desk. Once the brief can support a useful plan, proceed and state any sensible assumptions.',
-  'The Autoloop tools are the handoff channel for project work. When the brief is ready, call autoloop_prepare_project once. Give the project PM a short, memorable name in the conversation language that fits the project, like 猫队长 for a cat game. Follow a name already given by the user. A QUEUED or PLANNING receipt means the brief has been accepted for PM planning. Finish the same turn with a useful scope and acceptance summary and where the user will confirm the plan. The live card follows the background planning and offers confirmation when the draft is ready.',
-  'When the user changes or critiques a project brief or plan, call autoloop_send_feedback directly, including while it is awaiting confirmation. Preserve their feedback in the request and label any suggestions as proposals. When the user explicitly discards the unstarted plan or earlier direction as a whole, set replace_plan to true and include the new direction and constraints the user keeps. That supersedes older plan requests. Report the receipt as queued and use autoloop_status to distinguish queued feedback, work in progress, published plans and failures.',
+  'Use autoloop_product to establish a managed, reusable workflow and follow the managed product instructions. For a legacy one-off project, queue the ready brief with autoloop_prepare_project once and report the planning receipt and where the plan will be confirmed.',
+  'For managed products, use explicit version revision before start and the product Issue inbox for published workflow maintenance. For a legacy project brief or plan, use autoloop_send_feedback. Preserve the user’s requested changes and use replace_plan only when they explicitly replace the whole unstarted direction.',
   'Report a handoff only after the tool confirms receipt. If a tool fails, state the concrete failure and any recovery you actually performed. Keep internal routing, retry choices and tool permissions out of product clarification questions.',
   'Pass concrete acceptance checks and the user’s authorization boundaries when preparing a project.',
   'When discussing a project result, lead with what the user can try now. Read autoloop_status and share its preview_url when available, with one or two actions the user can take. Separate recorded verification results from checks still in progress, and distinguish a local preview from a published site.',
@@ -169,7 +172,7 @@ function modelCost(usage, route) {
     cacheRead * route.cache_read_rate + cacheWrite * route.cache_write_rate) / 1_000_000;
 }
 
-function startRuntime(ctx, config, dataDir, readBotState) {
+function startRuntime(ctx, config, dataDir, readBotState, github) {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const mailbox = mkdtempSync(join(dataDir, '.bridge-'));
   const lifetime = new AbortController();
@@ -179,8 +182,11 @@ function startRuntime(ctx, config, dataDir, readBotState) {
     '--codex-reasoning-effort', config.codexReasoningEffort,
     ...(config.codexProfile ? ['--codex-profile', config.codexProfile] : []),
     ...(config.codexComputerUse ? ['--codex-computer-use'] : []),
-  ], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+  ], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'], env: Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !/^(?:GH_|GITHUB_|AUTOLOOP_GITHUB_)/u.test(name)),
+  ) });
   const models = new Map();
+  const githubJobs = new Set();
   let failure;
   const exited = new Promise(resolve => {
     child.once('error', error => { failure = error; resolve(); });
@@ -214,7 +220,8 @@ function startRuntime(ctx, config, dataDir, readBotState) {
       ...request, chief_sessions: chiefSessions(readBotState(), request.session_id),
     } : request);
     try {
-      return await waitFile(result, HTTP_TIMEOUT_MS, signal ? AbortSignal.any([lifetime.signal, signal]) : lifetime.signal);
+      const timeout = request.path === BASE + 'product' ? 180_000 : HTTP_TIMEOUT_MS;
+      return await waitFile(result, timeout, signal ? AbortSignal.any([lifetime.signal, signal]) : lifetime.signal);
     } finally {
       rmSync(input, { force: true });
       rmSync(result, { force: true });
@@ -229,6 +236,21 @@ function startRuntime(ctx, config, dataDir, readBotState) {
         if (!existsSync(path)) job.abort.abort();
       }
       for (const filename of readdirSync(mailbox)) {
+        if (/^github-[a-f0-9]{32}\.request\.json$/u.test(filename)) {
+          const path = join(mailbox, filename);
+          const reply = path.replace(/\.request\.json$/u, '.response.json');
+          if (githubJobs.has(path) || existsSync(reply)) continue;
+          const request = readIfPublished(path);
+          if (request === undefined) continue;
+          githubJobs.add(path);
+          const settle = value => {
+            if (!lifetime.signal.aborted && existsSync(path)) writeJson(reply, value);
+          };
+          void Promise.resolve().then(() => github.dispatch(request)).then(
+            value => settle({ value }), error => settle({ error: String(error.message).slice(0, 400) }),
+          ).catch(error => ctx.logger.warn('Autoloop GitHub mailbox: %s', error.message)).finally(() => githubJobs.delete(path));
+          continue;
+        }
         if (!/^agent-[a-f0-9]{32}\.request\.json$/.test(filename)) continue;
         const path = join(mailbox, filename);
         const reply = path.replace(/\.request\.json$/, '.response.json');
@@ -391,8 +413,12 @@ export async function apply(ctx, input = {}) {
   const readBotState = () => readIfPublished(statePath);
   const bindingOf = id => id ? botBinding(readBotState(), id) : undefined;
   const roleOf = id => bindingOf(id)?.role;
-  const runtime = startRuntime(ctx, config, dataDir, readBotState);
+  mkdirSync(join(dataDir, 'managed-products'), { recursive: true, mode: 0o700 });
+  const github = createGitHubGateway(dataDir);
+  const python = await preparePython({ python: config.python, dataDir, requirementsPath: join(ROOT, 'requirements.txt') });
+  const runtime = startRuntime(ctx, { ...config, python }, dataDir, readBotState, github);
   const disposers = [];
+  disposers.push(github.close);
   const taskActions = bindChiefTaskActions(ctx, roleOf);
   disposers.push(() => taskActions.dispose());
   async function dispose() {
@@ -419,6 +445,7 @@ export async function apply(ctx, input = {}) {
     return data;
   };
   try {
+    disposers.push(ctx.connection.fetch.register(github.route(sessionId => roleOf(sessionId) === 'chief')));
     const chiefTarget = entry => {
       const binding = botBinding(readBotState(), entry.chief_session, true);
       return binding?.role === 'chief' ? binding.sessionId : undefined;
@@ -451,6 +478,7 @@ export async function apply(ctx, input = {}) {
     disposers.push(() => nativeDelivery.dispose());
     const { pm_plan_change_schema: planChangeSchema } = await runtime.ready();
     assertObjectJsonSchema(planChangeSchema);
+    disposers.push(installManagedProductHost(ctx, { runtime, dataDir, readBotState, botBinding, botConversation, pricedRoute, config, taskActions }));
     const turnSchema = z.number().int().nonnegative();
     disposers.push(installChiefContext(ctx, {
       roleOf, async readContext(sessionId, signal) {
@@ -475,7 +503,8 @@ export async function apply(ctx, input = {}) {
       nativeDelivery.consider(entries);
       return hasClients ? entries.map(anchorNotice) : [];
     }, error => ctx.logger.warn('Autoloop notifications: %s', error.message), {
-      alwaysRead: true, inputs: [join(dataDir, 'workspace', 'chief-communications.json'), statePath],
+      alwaysRead: true, inputs: [join(dataDir, 'workspace', 'chief-communications.json'),
+        join(dataDir, 'managed-products', 'products.json'), statePath],
     });
     disposers.push(() => feed.close());
     disposers.push(ctx.connection.fetch.register(feed.route));
