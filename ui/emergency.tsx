@@ -108,7 +108,7 @@ export function createEmergencyControl(React: typeof ReactTypes) {
         const top = rect.bottom + 9;
         const viewport = document.documentElement.clientWidth;
         card.style.top = `${top}px`;
-        card.style.right = `${Math.max(12, Math.min(viewport - rect.right, viewport - card.offsetWidth - 12))}px`;
+        card.style.left = `${Math.max(12, Math.min(rect.left, viewport - card.offsetWidth - 12))}px`;
         card.style.maxHeight = `${Math.max(0, window.innerHeight - top - 12)}px`;
       };
       if (topLayer) card.showPopover();
